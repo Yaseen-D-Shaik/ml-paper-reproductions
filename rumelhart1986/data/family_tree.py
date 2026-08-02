@@ -1,176 +1,107 @@
-"""Family tree triples for the Rumelhart 1986 reproduction."""
+PEOPLE = [
+    "Christopher", "Roberto", "Penelope", "Maria", "Andrew", "Pierro",
+    "Christine", "Francesca", "Arthur", "Emilio", "Margaret", "Gina",
+    "Victoria", "Lucia", "James", "Marco", "Jennifer", "Angela",
+    "Charles", "Tomaso", "Colin", "Alfonse", "Charlotte", "Sophia"
+]
 
-# Add family tree data here.
-PEOPLE= ["Christopher","Roberto","Penelope", "Maria", "Andrew", "pierro",
-         "christine","francesca","arthur","emilio","margaret","gina","james",
-         "Marco","Victoria","lucia","charies","tomaso","jennifer",
-         "Angela","colin","Alfonso","charlotte","sophia"]
+RELATIONSHIPS = [
+    "father", "mother", "husband", "wife", "son", "daughter", 
+    "uncle", "aunt", "brother", "sister", "nephew", "niece"
+]
 
+# Raw relational dataset mapping (Person1, Relation) -> [Person2 options]
+FAMILY_DATA = {
+    # --- English Family Branch ---
+    ("Christopher", "husband"): ["Penelope"],
+    ("Penelope", "wife"): ["Christopher"],
+    ("Andrew", "husband"): ["Christine"],
+    ("Christine", "wife"): ["Andrew"],
+    ("Arthur", "husband"): ["Margaret"],
+    ("Margaret", "wife"): ["Arthur"],
+    ("James", "husband"): ["Victoria"],
+    ("Victoria", "wife"): ["James"],
+    ("Charles", "husband"): ["Jennifer"],
+    ("Jennifer", "wife"): ["Charles"],
+    
+    ("Christopher", "father"): ["Victoria", "Arthur"],
+    ("Penelope", "mother"): ["Victoria", "Arthur"],
+    ("Andrew", "father"): ["James", "Charles"],
+    ("Christine", "mother"): ["James", "Charles"],
+    ("Victoria", "mother"): ["Colin", "Charlotte"],
+    ("James", "father"): ["Colin", "Charlotte"],
 
-RELATIONSHIPS= ["father", "mother","husband", "wife", "son", "daughter", 
-                "uncle", "aunt", "brother", "sister", "nephew","niece"]
+    ("Victoria", "daughter"): ["Christopher", "Penelope"],
+    ("Arthur", "son"): ["Christopher", "Penelope"],
+    ("James", "son"): ["Andrew", "Christine"],
+    ("Charles", "son"): ["Andrew", "Christine"],
+    ("Colin", "son"): ["Victoria", "James"],
+    ("Charlotte", "daughter"): ["Victoria", "James"],
 
+    ("Victoria", "sister"): ["Arthur"],
+    ("Arthur", "brother"): ["Victoria"],
+    ("James", "brother"): ["Charles"],
+    ("Charles", "brother"): ["James"],
+    ("Colin", "brother"): ["Charlotte"],
+    ("Charlotte", "sister"): ["Colin"],
 
-TRIPLES= {
-    # -------------------------
-    # ENGLISH FAMILY
-    # -------------------------
+    ("Arthur", "uncle"): ["Colin", "Charlotte"],
+    ("Margaret", "aunt"): ["Colin", "Charlotte"],
+    ("Andrew", "uncle"): ["Colin", "Charlotte"],
+    ("Christine", "aunt"): ["Colin", "Charlotte"],
 
-    # Christopher (gen 1, branch 1)
-    ("Christopher", "wife"):        ["Penelope"],
-    ("Christopher", "son"):         ["Arthur"],
-    ("Christopher", "daughter"):    ["Victoria"],
+    ("Colin", "uncle"): ["Arthur", "Charles"],
+    ("Colin", "aunt"): ["Margaret", "Jennifer"],
+    ("Charlotte", "uncle"): ["Arthur", "Charles"],
+    ("Charlotte", "aunt"): ["Margaret", "Jennifer"],
 
-    # Penelope (gen 1, branch 1)
-    ("Penelope", "husband"):        ["Christopher"],
-    ("Penelope", "son"):            ["Arthur"],
-    ("Penelope", "daughter"):       ["Victoria"],
+    ("Colin", "nephew"): ["Arthur", "Margaret", "Charles", "Jennifer"],
+    ("Charlotte", "niece"): ["Arthur", "Margaret", "Charles", "Jennifer"],
+    ("James", "nephew"): ["Arthur", "Margaret"],
+    ("Charles", "nephew"): ["Victoria", "James"],
+    ("Victoria", "niece"): ["Charles", "Jennifer"],
 
-    # Andrew (gen 1, branch 2)
-    ("Andrew", "wife"):             ["Christine"],
-    ("Andrew", "son"):              ["James"],
-    ("Andrew", "daughter"):         ["Jennifer"],
+    # --- Italian Family Branch ---
+    ("Roberto", "husband"): ["Maria"],
+    ("Maria", "wife"): ["Roberto"],
+    ("Pierro", "husband"): ["Francesca"],
+    ("Francesca", "wife"): ["Pierro"],
+    ("Emilio", "husband"): ["Gina"],
+    ("Gina", "wife"): ["Emilio"],
+    ("Marco", "husband"): ["Lucia"],
+    ("Lucia", "wife"): ["Marco"],
+    ("Tomaso", "husband"): ["Angela"],
+    ("Angela", "wife"): ["Tomaso"],
 
-    # Christine (gen 1, branch 2)
-    ("Christine", "husband"):       ["Andrew"],
-    ("Christine", "son"):           ["James"],
-    ("Christine", "daughter"):      ["Jennifer"],
+    ("Roberto", "father"): ["Lucia", "Emilio"],
+    ("Maria", "mother"): ["Lucia", "Emilio"],
+    ("Pierro", "father"): ["Marco", "Angela"],
+    ("Francesca", "mother"): ["Marco", "Angela"],
+    ("Lucia", "mother"): ["Alfonse", "Sophia"],
+    ("Marco", "father"): ["Alfonse", "Sophia"],
 
-    # Arthur (gen 2, branch 1) — no children, married Margaret
-    ("Arthur", "father"):           ["Christopher"],
-    ("Arthur", "mother"):           ["Penelope"],
-    ("Arthur", "wife"):             ["Margaret"],
-    ("Arthur", "sister"):           ["Victoria"],
-    ("Arthur", "nephew"):           ["Colin"],
-    ("Arthur", "niece"):            ["Charlotte"],
+    ("Lucia", "daughter"): ["Roberto", "Maria"],
+    ("Emilio", "son"): ["Roberto", "Maria"],
+    ("Marco", "son"): ["Pierro", "Francesca"],
+    ("Angela", "daughter"): ["Pierro", "Francesca"],
+    ("Alfonse", "son"): ["Lucia", "Marco"],
+    ("Sophia", "daughter"): ["Lucia", "Marco"],
 
-    # Margaret (gen 2, married into branch 1)
-    ("Margaret", "husband"):        ["Arthur"],
-    ("Margaret", "nephew"):         ["Colin"],
-    ("Margaret", "niece"):          ["Charlotte"],
+    ("Lucia", "sister"): ["Emilio"],
+    ("Emilio", "brother"): ["Lucia"],
+    ("Marco", "brother"): ["Angela"],
+    ("Angela", "sister"): ["Marco"],
+    ("Alfonse", "brother"): ["Sophia"],
+    ("Sophia", "sister"): ["Alfonse"],
 
-    # Victoria (gen 2, links both branches)
-    ("Victoria", "father"):         ["Christopher"],
-    ("Victoria", "mother"):         ["Penelope"],
-    ("Victoria", "husband"):        ["James"],
-    ("Victoria", "brother"):        ["Arthur"],
-    ("Victoria", "son"):            ["Colin"],
-    ("Victoria", "daughter"):       ["Charlotte"],
+    ("Emilio", "uncle"): ["Alfonse", "Sophia"],
+    ("Gina", "aunt"): ["Alfonse", "Sophia"],
 
-    # James (gen 2, branch 2)
-    ("James", "father"):            ["Andrew"],
-    ("James", "mother"):            ["Christine"],
-    ("James", "wife"):              ["Victoria"],
-    ("James", "sister"):            ["Jennifer"],
-    ("James", "son"):               ["Colin"],
-    ("James", "daughter"):          ["Charlotte"],
+    ("Alfonse", "uncle"): ["Emilio", "Angela"],
+    ("Alfonse", "aunt"): ["Gina", "Tomaso"],
+    ("Sophia", "uncle"): ["Emilio", "Angela"],
+    ("Sophia", "aunt"): ["Gina", "Tomaso"],
 
-    # Jennifer (gen 2, branch 2) — no children
-    ("Jennifer", "father"):         ["Andrew"],
-    ("Jennifer", "mother"):         ["Christine"],
-    ("Jennifer", "husband"):        ["Charles"],
-    ("Jennifer", "brother"):        ["James"],
-
-    # Charles (gen 2, married into branch 2)
-    ("Charles", "wife"):            ["Jennifer"],
-    ("Charles", "nephew"):          ["Colin"],
-    ("Charles", "niece"):           ["Charlotte"],
-
-    # Colin (gen 3)
-    ("Colin", "father"):            ["James"],
-    ("Colin", "mother"):            ["Victoria"],
-    ("Colin", "uncle"):             ["Arthur", "Charles"],
-    ("Colin", "aunt"):              ["Jennifer", "Margaret"],
-    ("Colin", "sister"):            ["Charlotte"],
-
-    # Charlotte (gen 3)
-    ("Charlotte", "father"):        ["James"],
-    ("Charlotte", "mother"):        ["Victoria"],
-    ("Charlotte", "uncle"):         ["Arthur", "Charles"],
-    ("Charlotte", "aunt"):          ["Jennifer", "Margaret"],
-    ("Charlotte", "brother"):       ["Colin"],
-
-    # -------------------------
-    # ITALIAN FAMILY (isomorphic)
-    # Roberto=Christopher, Maria=Penelope
-    # Pierro=Andrew, Francesca=Christine
-    # Emilio=Arthur, Gina=Margaret
-    # Lucia=Victoria, Marco=James
-    # Angela=Jennifer, Tomaso=Charles
-    # Alfonse=Colin, Sophia=Charlotte
-    # -------------------------
-
-    # Roberto (gen 1, branch 1)
-    ("Roberto", "wife"):            ["Maria"],
-    ("Roberto", "son"):             ["Emilio"],
-    ("Roberto", "daughter"):        ["Lucia"],
-
-    # Maria (gen 1, branch 1)
-    ("Maria", "husband"):           ["Roberto"],
-    ("Maria", "son"):               ["Emilio"],
-    ("Maria", "daughter"):          ["Lucia"],
-
-    # Pierro (gen 1, branch 2)
-    ("Pierro", "wife"):             ["Francesca"],
-    ("Pierro", "son"):              ["Marco"],
-    ("Pierro", "daughter"):         ["Angela"],
-
-    # Francesca (gen 1, branch 2)
-    ("Francesca", "husband"):       ["Pierro"],
-    ("Francesca", "son"):           ["Marco"],
-    ("Francesca", "daughter"):      ["Angela"],
-
-    # Emilio (gen 2, branch 1) — no children, married Gina
-    ("Emilio", "father"):           ["Roberto"],
-    ("Emilio", "mother"):           ["Maria"],
-    ("Emilio", "wife"):             ["Gina"],
-    ("Emilio", "sister"):           ["Lucia"],
-    ("Emilio", "nephew"):           ["Alfonse"],
-    ("Emilio", "niece"):            ["Sophia"],
-
-    # Gina (gen 2, married into branch 1)
-    ("Gina", "husband"):            ["Emilio"],
-    ("Gina", "nephew"):             ["Alfonse"],
-    ("Gina", "niece"):              ["Sophia"],
-
-    # Lucia (gen 2, links both branches)
-    ("Lucia", "father"):            ["Roberto"],
-    ("Lucia", "mother"):            ["Maria"],
-    ("Lucia", "husband"):           ["Marco"],
-    ("Lucia", "brother"):           ["Emilio"],
-    ("Lucia", "son"):               ["Alfonse"],
-    ("Lucia", "daughter"):          ["Sophia"],
-
-    # Marco (gen 2, branch 2)
-    ("Marco", "father"):            ["Pierro"],
-    ("Marco", "mother"):            ["Francesca"],
-    ("Marco", "wife"):              ["Lucia"],
-    ("Marco", "sister"):            ["Angela"],
-    ("Marco", "son"):               ["Alfonse"],
-    ("Marco", "daughter"):          ["Sophia"],
-
-    # Angela (gen 2, branch 2) — no children
-    ("Angela", "father"):           ["Pierro"],
-    ("Angela", "mother"):           ["Francesca"],
-    ("Angela", "husband"):          ["Tomaso"],
-    ("Angela", "brother"):          ["Marco"],
-
-    # Tomaso (gen 2, married into branch 2)
-    ("Tomaso", "wife"):             ["Angela"],
-    ("Tomaso", "nephew"):           ["Alfonse"],
-    ("Tomaso", "niece"):            ["Sophia"],
-
-    # Alfonse (gen 3)
-    ("Alfonse", "father"):          ["Marco"],
-    ("Alfonse", "mother"):          ["Lucia"],
-    ("Alfonse", "uncle"):           ["Emilio", "Tomaso"],
-    ("Alfonse", "aunt"):            ["Angela", "Gina"],
-    ("Alfonse", "sister"):          ["Sophia"],
-
-    # Sophia (gen 3)
-    ("Sophia", "father"):           ["Marco"],
-    ("Sophia", "mother"):           ["Lucia"],
-    ("Sophia", "uncle"):            ["Emilio", "Tomaso"],
-    ("Sophia", "aunt"):             ["Angela", "Gina"],
-    ("Sophia", "brother"):          ["Alfonse"],
+    ("Alfonse", "nephew"): ["Emilio", "Gina"],
+    ("Sophia", "niece"): ["Emilio", "Gina"],
 }
