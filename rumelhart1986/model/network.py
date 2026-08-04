@@ -24,7 +24,7 @@ class TreeNet(nn.Module):
         
     def __init_weight(self):
         for param in [self.c1, self.c2, self.w1, self.w2]:
-            nn.init.uniform(param, a= -0.3, b= 0.3)
+            nn.init.uniform_(param, a=-0.3, b=0.3)
             
     def forward(self, person1, relationship):
         

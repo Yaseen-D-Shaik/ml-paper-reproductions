@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from data.family_tree import PEOPLE, RELATIONSHIPS, FAMILY_DATA
+from data.family_tree import PEOPLE, RELATIONSHIPS, TRIPLES
 from model.network import TreeNet, encode
 
 
@@ -30,7 +30,7 @@ def dataset():
     test_set = set(test_triples)
     
     all_triples = []
-    for (p_ele, r_ele), p2_list in FAMILY_DATA.items():
+    for (p_ele, r_ele), p2_list in TRIPLES.items():
         p_indx = PEOPLE.index(p_ele)
         r_indx = RELATIONSHIPS.index(r_ele)
         
@@ -101,7 +101,7 @@ def main():
             person1, relationship= encode(p_indx, r_indx)
             
             target= torch.zeros(1, 24)
-            target[0, p2_indx]= 0.1
+            target[0, p2_indx]= 1.0
             
             output= model(person1, relationship)
             loss= compute_masked_loss(output, target)
@@ -112,8 +112,9 @@ def main():
         optimizer.step()
         
         with torch.no_grad():
-            for param in model.parameters():
-                param.mul_(0.998)
+            for name, param in model.named_parameters():
+                if 'b_' not in name:
+                    param.mul_(0.998)
                 
         if sweep == 1 or sweep % 100 == 0:
             print(f"Sweep {sweep:4d}/1500 | Loss: {total_sweep_loss:.6f}")
@@ -124,5 +125,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-    
