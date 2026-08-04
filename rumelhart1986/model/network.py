@@ -10,15 +10,15 @@ class TreeNet(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        self.c1= nn.parameter(torch.empty(24, 6))
-        self.c2= nn.parameter(torch.empty(12, 6))
-        self.w1= nn.parameter(torch.empty(12, 6))
-        self.w2= nn.parameter(torch.empty(6, 24))
+        self.c1 = nn.Parameter(torch.empty(24, 6))
+        self.c2 = nn.Parameter(torch.empty(12, 6))
+        self.w1 = nn.Parameter(torch.empty(12, 6))
+        self.w2 = nn.Parameter(torch.empty(6, 24))
         
-        self.b_c1= nn.parameter(torch.zeros(6))
-        self.b_c2= nn.parameter(torch.zeros(6))
-        self.b_w1= nn.parameter(torch.zeros(6))
-        self.b_w2= nn.parameter(torch.zeros(24))
+        self.b_c1 = nn.Parameter(torch.zeros(6))
+        self.b_c2 = nn.Parameter(torch.zeros(6))
+        self.b_w1 = nn.Parameter(torch.zeros(6))
+        self.b_w2 = nn.Parameter(torch.zeros(24))
         
         self.__init_weight()
         
@@ -33,8 +33,8 @@ class TreeNet(nn.Module):
         
         cont= torch.concat([prep, relrep], dim=1)
         
-        hiden1= torch.sigmoid(torch.matmul(cont , self.w1) + self.b_w1)
-        output= torch.sigmoid(torch.sigmoid(hiden1, self.w2) + self.b_w2)
+        hiden1 = torch.sigmoid(torch.matmul(cont, self.w1) + self.b_w1)
+        output = torch.sigmoid(torch.matmul(hiden1, self.w2) + self.b_w2)
         
         return output
     
