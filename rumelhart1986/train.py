@@ -80,5 +80,49 @@ def main():
     train_triples, test_triples= dataset()
     print(f"Dataset Loaded | Train Triples: {len(train_triples)} | Test Triples: {len(test_triples)}")
     
-    optim.SGD()
+    model= TreeNet()
+    optimizer= optim.SGD(model.parameters(), lr=0.005, momentum=0.5)
+    
+    print("\nStarting Training (1500 Sweeps)...")
+    
+    
+    for sweep in range(1, 1502):
+        if sweep == 21:
+            
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = 0.01
+                param_group['momentum']= 0.9
+        
+        optimizer.zero_grad()
+        total_sweep_loss = 0.0
+        
+        for p_indx, r_indx, p2_indx in train_triples:
+            
+            person1, relationship= encode(p_indx, r_indx)
+            
+            target= torch.zeros(1, 24)
+            target[0, p2_indx]= 0.1
+            
+            output= model(person1, relationship)
+            loss= compute_masked_loss(output, target)
+            
+            loss.backward()
+            total_sweep_loss += loss.item()
+            
+        optimizer.step()
+        
+        with torch.no_grad():
+            for param in model.parameters():
+                param.mul_(0.998)
+                
+        if sweep == 1 or sweep % 100 == 0:
+            print(f"Sweep {sweep:4d}/1500 | Loss: {total_sweep_loss:.6f}")
+            
+    evaluate(model, test_triples)
+    
+
+
+if __name__ == "__main__":
+    main()
+    
     
