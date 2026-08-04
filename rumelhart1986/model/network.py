@@ -42,9 +42,9 @@ class TreeNet(nn.Module):
 def encode(person_indx, relation_indx, n_perion=24, n_relation=12):
     
     person_onehot= torch.zeros(n_perion, dtype=torch.float32)
-    person_onehot[person_indx]= 0.1
+    person_onehot[person_indx]= 1.0
     rel_onehot= torch.zeros(n_relation, dtype= torch.float32)
-    rel_onehot[relation_indx]= 0.1
+    rel_onehot[relation_indx]= 1.0
     return person_onehot.unsqueeze(0), rel_onehot.unsqueeze(0)
 
 
