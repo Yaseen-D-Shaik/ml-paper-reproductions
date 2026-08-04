@@ -29,16 +29,16 @@ def dataset():
     ]
     test_set = set(test_triples)
     
+    all_triples = []
     for (p_ele, r_ele), p2_list in FAMILY_DATA.items():
-        
-        all_triples= []
-        p_indx= PEOPLE.index(p_ele)
-        r_indx= RELATIONSHIPS.index(r_ele)
+        p_indx = PEOPLE.index(p_ele)
+        r_indx = RELATIONSHIPS.index(r_ele)
         
         for p2_ele in p2_list:
-            p2_indx= PEOPLE.index(p2_ele)
+            p2_indx = PEOPLE.index(p2_ele)
             all_triples.append((p_indx, r_indx, p2_indx))
-            
+    
+    print(f"DEBUG: all_triples count = {len(all_triples)}")
     train_triples = [t for t in all_triples if t not in test_set]
     return train_triples, test_triples
         
