@@ -27,13 +27,12 @@ class TreeNet(nn.Module):
             nn.init.uniform_(param, a=-0.3, b=0.3)
             
     def forward(self, person1, relationship):
-        # For one-hot inputs, a linear projection acts as a learned lookup table
-        # for the person/relationship embedding. Using a sigmoid here squashes the
-        # embedding into (0, 1) and creates a vanishing-gradient bottleneck, so we
-        # keep these first projections linear to preserve the intended embedding
-        # behavior of the original experiment.
-        prep = torch.matmul(person1, self.c1) + self.b_c1
-        relrep = torch.matmul(relationship, self.c2) + self.b_c2
+        # The paper describes sigmoid on every unit, including the first projection
+        # layer. We restore sigmoid at the person and relationship encoding stages
+        # to remain faithful to the original architecture while preserving the
+        # higher learning rate that unlocked learning in our experiments.
+        prep = torch.sigmoid(torch.matmul(person1, self.c1) + self.b_c1)
+        relrep = torch.sigmoid(torch.matmul(relationship, self.c2) + self.b_c2)
         
         cont = torch.concat([prep, relrep], dim=1)
         

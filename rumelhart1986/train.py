@@ -77,7 +77,7 @@ def main():
     print(f"Dataset Loaded | Train Triples: {len(train_triples)} | Test Triples: {len(test_triples)}")
     
     model= TreeNet()
-    optimizer= optim.SGD(model.parameters(), lr=0.005, momentum=0.5)
+    optimizer= optim.SGD(model.parameters(), lr=0.05, momentum=0.5)
     
     print("\nStarting Training (1500 Sweeps)...")
     
@@ -86,7 +86,7 @@ def main():
         if sweep == 21:
             
             for param_group in optimizer.param_groups:
-                param_group['lr'] = 0.01
+                param_group['lr'] = 0.1
                 param_group['momentum']= 0.9
         
         optimizer.zero_grad()
