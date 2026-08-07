@@ -12,11 +12,7 @@ from model.network import TreeNet, encode
 
 def compute_masked_loss(output, target):
     error = output - target
-    mask = ~((target == 1.0) & (output > 0.8)) & \
-           ~((target == 0.0) & (output < 0.2))
-    
-    mask_error= error * mask.detach()
-    return 0.5 * torch.sum(mask_error ** 2)
+    return (0.5 * torch.sum(error ** 2)) / len(TRIPLES)
 
 
 def dataset():
@@ -112,9 +108,10 @@ def main():
         optimizer.step()
         
         with torch.no_grad():
-            for name, param in model.named_parameters():
-                if 'b_' not in name:
-                    param.mul_(0.998)
+            if sweep > 200:
+                for name, param in model.named_parameters():
+                    if 'b_' not in name:
+                        param.mul_(0.998)
                 
         if sweep == 1 or sweep % 100 == 0:
             print(f"Sweep {sweep:4d}/1500 | Loss: {total_sweep_loss:.6f}")
