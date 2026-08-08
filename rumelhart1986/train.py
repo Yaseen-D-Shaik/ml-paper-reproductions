@@ -1,4 +1,12 @@
-"""Training loop for Rumelhart et al. 1986 reproduction."""
+"""Training loop for Rumelhart et al. 1986 reproduction.
+
+Critical implementation note:
+The paper uses ONLINE gradient descent — weights are updated after each
+individual training triple, not after accumulating gradients over all triples.
+Equation 9 states t is incremented for each input-output case, confirming
+per-case updates. Full-batch accumulation causes gradient cancellation across
+the 108 competing triples, preventing convergence.
+"""
 
 import random
 import torch
@@ -58,42 +66,43 @@ def main():
 
     model = TreeNet()
 
-    # Phase 1: sweeps 1-20, low momentum warm-up (paper specification)
-    # lr=0.05 chosen empirically — paper's lr=0.005 is too small relative
-    # to weight decay magnitude for this PyTorch implementation
-    optimizer = optim.SGD(model.parameters(), lr=0.05, momentum=0.5)
+    # Online SGD: one optimizer step per training triple per sweep
+    # Use the diagnostic's stable online hyperparameters from sweep 1.
+    optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.0)
 
-    print("\nStarting Training (1500 Sweeps)...")
+    print("\nStarting Training (10000 Sweeps)...")
 
-    for sweep in range(1, 1501):
+    for sweep in range(1, 10000):
 
-        # Phase 2: sweeps 21-1500
-        if sweep == 21:
-            optimizer.param_groups[0]['lr'] = 0.1
-            optimizer.param_groups[0]['momentum'] = 0.9
-
-        optimizer.zero_grad()
         total_loss = 0.0
 
+        # ONLINE: update after each triple, not after full sweep
         for p1_idx, rel_idx, p2_idx in train_triples:
+            optimizer.zero_grad()
+
             p1t, rt = encode(p1_idx, rel_idx)
             target  = torch.zeros(1, 24)
             target[0, p2_idx] = 1.0
+
             output = model(p1t, rt)
-            loss = 0.5 * torch.sum((output - target) ** 2)
+            loss   = 0.5 * torch.sum((output - target) ** 2)
             loss.backward()
+            optimizer.step()
+
             total_loss += loss.item()
 
-        optimizer.step()
-
-        # Multiplicative weight decay — paper: 0.2% per weight update
-        with torch.no_grad():
-            for name, param in model.named_parameters():
-                if 'b_' not in name:
-                    param.mul_(0.998)
-
-        if sweep == 1 or sweep % 100 == 0:
-            print(f"Sweep {sweep:4d}/1500 | Loss: {total_loss:.4f}")
+        if sweep == 1 or sweep % 500 == 0:
+            # Spot check a known training triple
+            model.eval()
+            with torch.no_grad():
+                p1t, rt = encode(
+                    PEOPLE.index("Christopher"),
+                    RELATIONSHIPS.index("wife")
+                )
+                out = model(p1t, rt)
+                pen = out[0, PEOPLE.index("Penelope")].item()
+            model.train()
+            print(f"Sweep {sweep:4d}/10000 | Loss: {total_loss:.4f} | Christopher->wife->Penelope: {pen:.4f}")
 
     evaluate(model, test_triples)
 
