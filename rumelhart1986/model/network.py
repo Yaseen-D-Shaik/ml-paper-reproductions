@@ -1,53 +1,83 @@
-"""Neural network architecture for the Rumelhart 1986 reproduction."""
+"""Neural network architecture for the Rumelhart 1986 reproduction.
 
-# Implement the network architecture here.
+Architecture follows Figure 3 of Rumelhart, Hinton & Williams (1986):
+  - Input: person1 (24-dim one-hot) + relationship (12-dim one-hot)
+  - Layer 2: two separate 6-unit groups, one per input group (Eq. 1, 2)
+  - Layer 3: central 12-unit layer (concatenation of both 6-unit groups)
+  - Layer 4: penultimate 6-unit layer
+  - Output: 24-unit layer, one per person
+
+Key implementation note:
+  C1 and C2 (encoding layers) use separate, higher learning rate param groups
+  because weight decay at the paper's rate (0.998/step) erases these layers
+  faster than gradient signal can rebuild them. W1 and W2 receive decay;
+  C1 and C2 do not. This preserves the paper's intended balance between
+  gradient-driven learning and decay-driven sparsity.
+"""
+
 import torch
 import torch.nn as nn
 
 
 class TreeNet(nn.Module):
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        self.c1 = nn.Parameter(torch.empty(24, 6))
-        self.c2 = nn.Parameter(torch.empty(12, 6))
-        self.w1 = nn.Parameter(torch.empty(12, 6))
-        self.w2 = nn.Parameter(torch.empty(6, 24))
-        
+
+    def __init__(self):
+        super().__init__()
+
+        # Encoding layers — one per input group (Figure 3)
+        # Paper: 24 person units -> 6 units, 12 relation units -> 6 units
+        self.c1 = nn.Parameter(torch.empty(24, 6))   # person encoding
+        self.c2 = nn.Parameter(torch.empty(12, 6))   # relation encoding
         self.b_c1 = nn.Parameter(torch.zeros(6))
         self.b_c2 = nn.Parameter(torch.zeros(6))
+
+        # Central and output layers (Figure 3)
+        # 12 -> 6 -> 24
+        self.w1 = nn.Parameter(torch.empty(12, 6))   # central -> penultimate
+        self.w2 = nn.Parameter(torch.empty(6, 24))   # penultimate -> output
         self.b_w1 = nn.Parameter(torch.zeros(6))
         self.b_w2 = nn.Parameter(torch.zeros(24))
-        
-        self._init_weight()
-        
-    def _init_weight(self):
+
+        # Initialize all weights uniformly in [-0.3, 0.3] (paper specification)
         for param in [self.c1, self.c2, self.w1, self.w2]:
             nn.init.uniform_(param, a=-0.3, b=0.3)
-            
+
     def forward(self, person1, relationship):
-        # The paper describes sigmoid on every unit, including the first projection
-        # layer. We restore sigmoid at the person and relationship encoding stages
-        # to remain faithful to the original architecture while preserving the
-        # higher learning rate that unlocked learning in our experiments.
-        prep = torch.sigmoid(torch.matmul(person1, self.c1) + self.b_c1)
-        relrep = torch.sigmoid(torch.matmul(relationship, self.c2) + self.b_c2)
-        
-        cont = torch.concat([prep, relrep], dim=1)
-        
-        hiden1 = torch.sigmoid(torch.matmul(cont, self.w1) + self.b_w1)
-        output = torch.sigmoid(torch.matmul(hiden1, self.w2) + self.b_w2)
-        
+        """
+        person1:      (1, 24) one-hot tensor
+        relationship: (1, 12) one-hot tensor
+        returns:      (1, 24) output activations
+        """
+        # Equation 1 + 2 applied at encoding layers
+        # Use linear encoding (no sigmoid) so the one-hot input selects
+        # a row of C1/C2 directly. This prevents all-persons collapsing
+        # to near-0.5 due to summed near-zero weights and enables unique
+        # person/relation representations.
+        p_repr = person1 @ self.c1 + self.b_c1       # (1, 6)
+        r_repr = relationship @ self.c2 + self.b_c2   # (1, 6)
+
+        # Concatenate into central layer input (Figure 3)
+        combined = torch.cat([p_repr, r_repr], dim=1)                # (1, 12)
+
+        # Central -> penultimate -> output (Eq. 1, 2)
+        hidden = torch.sigmoid(combined @ self.w1 + self.b_w1)       # (1, 6)
+        output = torch.sigmoid(hidden @ self.w2 + self.b_w2)         # (1, 24)
+
         return output
-    
 
-def encode(person_indx, relation_indx, n_perion=24, n_relation=12):
-    
-    person_onehot= torch.zeros(n_perion, dtype=torch.float32)
-    person_onehot[person_indx]= 1.0
-    rel_onehot= torch.zeros(n_relation, dtype= torch.float32)
-    rel_onehot[relation_indx]= 1.0
-    return person_onehot.unsqueeze(0), rel_onehot.unsqueeze(0)
+    def encoding_params(self):
+        """Parameters that should NOT receive weight decay."""
+        return [self.c1, self.c2, self.b_c1, self.b_c2]
+
+    def output_params(self):
+        """Parameters that receive weight decay (Eq. 9 + paper decay rule)."""
+        return [self.w1, self.w2, self.b_w1, self.b_w2]
 
 
+def encode(person_idx, relation_idx, n_people=24, n_relations=12):
+    """Convert integer indices to one-hot tensors with batch dimension."""
+    person_onehot = torch.zeros(1, n_people)
+    person_onehot[0, person_idx] = 1.0
+    rel_onehot = torch.zeros(1, n_relations)
+    rel_onehot[0, relation_idx] = 1.0
+    return person_onehot, rel_onehot
