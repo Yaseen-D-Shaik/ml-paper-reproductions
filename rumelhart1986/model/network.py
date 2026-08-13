@@ -7,12 +7,10 @@ Architecture follows Figure 3 of Rumelhart, Hinton & Williams (1986):
   - Layer 4: penultimate 6-unit layer
   - Output: 24-unit layer, one per person
 
-Key implementation note:
-  C1 and C2 (encoding layers) use separate, higher learning rate param groups
-  because weight decay at the paper's rate (0.998/step) erases these layers
-  faster than gradient signal can rebuild them. W1 and W2 receive decay;
-  C1 and C2 do not. This preserves the paper's intended balance between
-  gradient-driven learning and decay-driven sparsity.
+encoding_params() / output_params() split the parameters into two groups so
+train.py can apply weight decay to either group independently — decay scope
+(all params vs. output-layer-only) is one of the axes under investigation,
+not a fixed architectural decision.
 """
 
 import torch
@@ -21,8 +19,16 @@ import torch.nn as nn
 
 class TreeNet(nn.Module):
 
-    def __init__(self):
+    def __init__(self, encoding_nonlinearity="linear", w1_init_range=0.3):
+        """
+        encoding_nonlinearity: "linear" or "sigmoid" — whether C1/C2 outputs
+            pass through a sigmoid (paper's Eq. 1+2 applied uniformly to all
+            layers) or stay linear (current working assumption).
+        w1_init_range: uniform init bound for w1, i.e. U(-w1_init_range, w1_init_range).
+            Paper specifies 0.3 for all weights; current code deviates to 1.0.
+        """
         super().__init__()
+        self.encoding_nonlinearity = encoding_nonlinearity
 
         # Encoding layers — one per input group (Figure 3)
         # Paper: 24 person units -> 6 units, 12 relation units -> 6 units
@@ -39,8 +45,10 @@ class TreeNet(nn.Module):
         self.b_w2 = nn.Parameter(torch.zeros(24))
 
         # Initialize all weights uniformly in [-0.3, 0.3] (paper specification)
-        for param in [self.c1, self.c2, self.w1, self.w2]:
+        for param in [self.c1, self.c2, self.w2]:
             nn.init.uniform_(param, a=-0.3, b=0.3)
+
+        nn.init.uniform_(self.w1, a=-w1_init_range, b=w1_init_range)
 
     def forward(self, person1, relationship):
         """
@@ -49,12 +57,11 @@ class TreeNet(nn.Module):
         returns:      (1, 24) output activations
         """
         # Equation 1 + 2 applied at encoding layers
-        # Use linear encoding (no sigmoid) so the one-hot input selects
-        # a row of C1/C2 directly. This prevents all-persons collapsing
-        # to near-0.5 due to summed near-zero weights and enables unique
-        # person/relation representations.
         p_repr = person1 @ self.c1 + self.b_c1       # (1, 6)
         r_repr = relationship @ self.c2 + self.b_c2   # (1, 6)
+        if self.encoding_nonlinearity == "sigmoid":
+            p_repr = torch.sigmoid(p_repr)
+            r_repr = torch.sigmoid(r_repr)
 
         # Concatenate into central layer input (Figure 3)
         combined = torch.cat([p_repr, r_repr], dim=1)                # (1, 12)
