@@ -4,9 +4,9 @@ run_experiment(config) exposes each axis currently under investigation as a
 config field, so different combinations (online vs. batch updates, weight
 decay scope/rate, masked-loss threshold, LR/momentum schedule, target
 encoding) can be run and compared on equal footing instead of requiring
-hand-edits per experiment. main() runs the config equivalent to the
-previously committed behavior by default, so `python train.py` still works
-as before.
+hand-edits per experiment. main() runs BEST_CONFIG, the best-known
+combination found so far — see FINDINGS.md for how it was derived and why
+it's still a work in progress, not a finished reproduction.
 """
 
 import random
@@ -32,6 +32,26 @@ PAPER_SCHEDULE = [(20, 0.005, 0.5), (float("inf"), 0.01, 0.9)]
 # Paper's weight decay: "decrementing every weight by 0.2% after each weight
 # change" -> multiply by (1 - 0.002) after each update.
 PAPER_DECAY_RATE = 0.998
+
+# Best-known config as of the decay/architecture investigation (see
+# rumelhart1986/FINDINGS.md). Reaches a stable ~0.29 mean test activation
+# (individual triples up to ~0.45) but 0/100 train and 0/4 test at the 0.8
+# pass threshold — NOT a converged reproduction yet. Kept here as the
+# starting point for the next round of investigation, not as a final answer.
+BEST_CONFIG = {
+    "update_scheme": "batch",
+    "lr_schedule": PAPER_SCHEDULE,
+    "decay_rate": PAPER_DECAY_RATE,
+    "decay_scope": "all",
+    "decay_start_sweep": 2000,
+    "decay_ramp_sweeps": 250,
+    "use_masked_loss": True,
+    "target_encoding": "multihot",
+    "encoding_nonlinearity": "sigmoid",
+    "w1_init_range": 0.3,
+    "n_sweeps": 6000,
+    "seed": 42,
+}
 
 
 def build_dataset(target_encoding="split"):
@@ -323,7 +343,7 @@ def run_experiment(config, verbose=True):
 
 
 def main():
-    run_experiment({})
+    run_experiment(BEST_CONFIG)
 
 
 if __name__ == "__main__":
