@@ -245,49 +245,126 @@ plausibly because Fig. 4's own analysis found person identity reduces to
 only ~2-3 meaningful dimensions (nationality, generation, branch) in the
 first place.
 
-## Open questions for next time
+## What the learned weights actually encode (interpretability check)
 
-- **Re-validate the decay-rate frontier tables from the earlier sections on
-  the corrected `TEST_TRIPLES`** — those numbers predate the dataset fix;
-  the asymmetric-split and bottleneck+decay tables above are already
-  post-fix and trustworthy.
-- **Why does relation consistently outperform person at every tested split?**
-  Confirmed as a real, consistent pattern, not yet explained mechanistically
-  — worth inspecting what `c2`'s 5 learned dimensions actually encode
-  (visualize like Fig. 4, once `visualize.py` exists) to see if it maps onto
-  interpretable relationship structure (direction, generation, gender).
-- **The uncle/aunt asymmetry mostly disappeared at the new optimum** (0.33-
-  0.37 across all four, vs. the earlier ~0.4/~0.2 split) — worth confirming
-  this holds up as more than a coincidence of this one config, since it was
-  flagged as a real open question before this round and seems to have
-  resolved itself without being directly targeted.
-- **Kept in reserve from the architecture brainstorm, not yet tried**:
-  widening the penultimate hidden layer (paper: 6, never varied) to test
-  whether the bottleneck's benefit is specific to the identity-encoding
-  layer or just "less capacity anywhere"; replacing `concat` with a bilinear
-  person×relation interaction instead of `concat → linear`.
-- **Sigmoid encoding's own decay-rate frontier isn't fully mapped past
-  0.998** — does going stronger (0.997, 0.995, as was tried for linear
-  encoding) improve it further, or plateau the same way?
-- **No config has recovered both high train accuracy and strong test
-  performance simultaneously** — every result so far sits on a frontier,
-  trading one for the other. Is there a fundamentally different lever
-  (rather than a better point on this same frontier) that could break the
-  tradeoff — e.g. a different loss formulation, a different masked-loss
-  threshold, or restructuring how the isomorphic English/Italian trees share
-  parameters?
-- **Layer-specific decay rates (gentler on `c1`/`c2`, paper rate on
-  `w1`/`w2`) were tested only under linear encoding and only made things
-  moderately better (18/100 vs. 10/100 at matched sweeps), never re-tested
-  under sigmoid encoding** — worth another pass given how much sigmoid
-  encoding changed everything else.
-- **`w1_init_range` and `encoding_nonlinearity` were only ever tested
-  together** (paper values as a pair) — never isolated from each other. Not
-  yet known which of the two is doing more of the work.
-- Still using `n_sweeps=6000`, well beyond the paper's stated 1500 — worth
-  understanding whether the paper's own 1500-sweep training was doing
-  something qualitatively different, or whether it's simply a smaller
-  number that happened to work for their exact setup.
+Before pushing further on architecture, we inspected `BEST_CONFIG`'s trained
+`c1`/`c2` directly rather than just trusting the test-accuracy number, to
+check whether the uncle/aunt-asymmetry fix reflects real structure or
+coincidence. Compared `c2` (relation encoding) between the earlier
+symmetric-gap model (`person_dim=3, relation_dim=3`) and `BEST_CONFIG`
+(`person_dim=1, relation_dim=5`):
+
+- **`c1` (1-dimensional) spontaneously organized itself by generation**,
+  unprompted: English gen-3 (Colin/Charlotte) ≈ -2.27, gen-1 of *both* trees
+  cluster within 0.02 of each other near zero, Italian gen-3
+  (Sophia/Alfonse) ≈ +2.28 — an almost perfectly symmetric mirror around 0.
+  A single real number recovered most of the information Fig. 4 describes
+  as spread across 2-3 of the paper's 6 dimensions.
+- **The uncle/aunt fix is traceable to a specific, real change**: uncle/aunt
+  and nephew/niece are reciprocal relations (same family link, opposite
+  viewpoint), so a compositional representation should align their
+  male-minus-female difference vectors closely. That alignment measurably
+  tightened: cosine similarity between the two pairs' gender-axes went from
+  0.916 (symmetric model, gap present) to 0.998 (`BEST_CONFIG`, gap
+  resolved) — extra relation capacity let the network make this shared
+  structure genuinely shared rather than approximately shared.
+- **Caveat**: `father/mother` and `husband/wife` remain nearly unrelated to
+  `uncle/aunt`'s gender axis in both models (cosine ≈ -0.05 to -0.18) — the
+  network isn't using one universal "gender" direction, more like two loose
+  clusters ({uncle/aunt, nephew/niece, brother/sister, son/daughter} vs.
+  {father/mother, husband/wife}). Single seed/run — worth confirming across
+  seeds before treating as settled.
+
+## Where convergence actually stands
+
+`BEST_CONFIG` (`person_dim=1, relation_dim=5`, decay from sweep 2000) reaches
+0.350 mean test activation but only 11/104 train, 0/4 above the 0.8
+threshold. To understand whether more time would help, we ran this
+architecture **without decay** out to 30,000 sweeps (5x the budget used
+everywhere else) and watched the full trajectory:
+
+```
+Sweep  3000: Train 25/104 | Test 0.4555  <- peak
+Sweep 9000-17000: Train 41->60/104 | Test holds 0.42-0.45 (wide, stable plateau)
+Sweep 19000+: Test begins a slow decline
+Sweep 30000: Train 52/104 (noisy) | Test 0.348
+```
+
+Two real findings here: (1) this architecture has a genuinely different,
+much more forgiving trajectory than the old `encoding_dim=6` one — a wide
+plateau (sweeps ~3000-17000) where training climbs steadily while test holds
+near its peak, not the near-immediate decline the old architecture showed;
+but (2) it still eventually overfits, just far more slowly — confirming
+overfitting is a real, persistent risk here, not something the architecture
+change eliminated.
+
+We then tried applying decay right where the plateau ends (`decay_start_sweep
+=16000`) instead of the old, uncalibrated `sweep=2000`, at three rates:
+
+```
+rate=0.998 (strong): shock-collapses train (58->9/104), settles at test 0.354
+rate=0.9995 (weak):  shock-collapses train similarly, settles at test 0.355
+rate=0.999 (medium): also collapses train initially, but RECOVERS and keeps
+                      climbing afterward: 0.346 -> 0.412, still rising at
+                      sweep 30000, not leveled off
+```
+
+Same lesson as the very first decay-onset experiments earlier in this
+investigation, now confirmed at a completely different architecture and
+scale: **decay rate controls the destination, onset timing controls the
+path** — correctly timing the onset to the plateau's end didn't prevent the
+shock at strong/weak rates, only the medium rate avoided settling into a
+worse state than doing nothing. We deliberately stopped here rather than
+just extending the promising `rate=0.999` run further — chasing a better
+number by brute-forcing more sweeps isn't a substitute for understanding
+*why* the plateau ends, or finding a mechanism that doesn't require this
+much wall-clock time to discover.
+
+## Candidate paths forward (prioritized, as of this consolidation)
+
+The core unresolved problem: every config found so far sits on a frontier
+trading training accuracy against test performance. Nothing has broken that
+tradeoff — only found better and better points on it. Ranked by how directly
+each one attacks *that*, rather than just re-tuning a knob we already
+understand:
+
+1. **Understand the mechanism of the late-stage decline, rather than just
+   reacting to it with decay.** We know *when* the plateau ends (~sweep
+   18,000-19,000) but not *why*. Same interpretability approach that found
+   the generation-axis and gender-axis structure earlier — snapshot the
+   model at sweep 15,000 (plateau, good) vs. 25,000 (declined) and compare
+   `c1`/`c2`/`w2` directly. Is the clean generation-axis structure in `c1`
+   degrading? Is `w2` starting to encode person-specific shortcuts? This is
+   the most likely path to a fix that isn't just another decay-rate guess.
+2. **Multi-seed validation.** Every result in this entire document —
+   including the person/relation split search and the plateau itself — used
+   `seed=42` exclusively. We don't know yet whether `person_dim=1,
+   relation_dim=5` and its wide plateau are robust properties of this task,
+   or a lucky draw from one initialization. Cheap to check (rerun
+   `BEST_CONFIG` and the no-decay trajectory at 2-3 more seeds), and it
+   either solidifies everything above or reveals it's fragile — either way,
+   worth knowing before investing more in this exact config.
+3. **Weight averaging across the plateau.** We found a wide, stable region
+   (sweeps ~3000-17000) where test performance holds near its peak while
+   training keeps climbing. Averaging weight snapshots from several points
+   within that plateau (stochastic weight averaging) is a well-established
+   technique for exactly this situation — it might yield a single model
+   better than any individual snapshot, without more sweeps or decay tuning.
+4. **The two architecture ideas kept in reserve**: widening the penultimate
+   hidden layer (paper: 6, never varied — would tell us whether the
+   bottleneck's benefit is specific to identity-encoding or just "less
+   capacity anywhere"), and replacing `concat` with a bilinear person×
+   relation interaction. Deliberately not tried yet since we wanted to
+   understand the person/relation split first — now that we do (relation
+   carries more of the compositional load), these are informed rather than
+   speculative choices.
+5. **Smaller, more mechanical follow-ups**: layer-specific decay rates were
+   only tested under linear encoding, never sigmoid; `w1_init_range` and
+   `encoding_nonlinearity` were only ever changed together, never isolated;
+   the decay-rate frontier tables from early sections predate the
+   `TEST_TRIPLES` fix and should be re-measured for trustworthy absolute
+   numbers (the asymmetric-split and bottleneck+decay tables are already
+   post-fix).
 
 ## Harness reference
 
