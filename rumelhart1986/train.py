@@ -17,11 +17,18 @@ from data.family_tree import PEOPLE, RELATIONSHIPS, TRIPLES
 from model.network import TreeNet, encode
 
 
+# Two isomorphism-mirrored pairs: (English person, relation) and its Italian
+# counterpart, each a multi-answer key so the network must predict one of two
+# valid targets. Verified against TRIPLES directly (see FINDINGS.md) —
+# earlier versions of this set included (Penelope, mother, Victoria) and
+# (Charlotte, aunt, Christine), neither of which is a real fact: the former
+# had the relation direction backwards (Victoria is Penelope's daughter, not
+# her mother) and the latter names Charlotte's grandmother, not an aunt.
 TEST_TRIPLES = [
-    (PEOPLE.index("Colin"),     RELATIONSHIPS.index("uncle"),  PEOPLE.index("Arthur")),
-    (PEOPLE.index("Alfonse"),   RELATIONSHIPS.index("uncle"),  PEOPLE.index("Emilio")),
-    (PEOPLE.index("Penelope"),  RELATIONSHIPS.index("mother"), PEOPLE.index("Victoria")),
-    (PEOPLE.index("Charlotte"), RELATIONSHIPS.index("aunt"),   PEOPLE.index("Christine")),
+    (PEOPLE.index("Colin"),     RELATIONSHIPS.index("uncle"), PEOPLE.index("Arthur")),
+    (PEOPLE.index("Alfonse"),   RELATIONSHIPS.index("uncle"), PEOPLE.index("Emilio")),
+    (PEOPLE.index("Charlotte"), RELATIONSHIPS.index("aunt"),  PEOPLE.index("Margaret")),
+    (PEOPLE.index("Sophia"),    RELATIONSHIPS.index("aunt"),  PEOPLE.index("Gina")),
 ]
 
 # Paper's two-phase schedule (Fig. 4 caption): epsilon=0.005, alpha=0.5 for
@@ -34,10 +41,14 @@ PAPER_SCHEDULE = [(20, 0.005, 0.5), (float("inf"), 0.01, 0.9)]
 PAPER_DECAY_RATE = 0.998
 
 # Best-known config as of the decay/architecture investigation (see
-# rumelhart1986/FINDINGS.md). Reaches a stable ~0.29 mean test activation
-# (individual triples up to ~0.45) but 0/100 train and 0/4 test at the 0.8
-# pass threshold — NOT a converged reproduction yet. Kept here as the
-# starting point for the next round of investigation, not as a final answer.
+# rumelhart1986/FINDINGS.md). Reaches ~0.35 mean test activation (individual
+# triples 0.33-0.37, tightly clustered) but 11/104 train and 0/4 test at the
+# 0.8 pass threshold — NOT a converged reproduction yet. The asymmetric
+# encoding split (person_dim=1, relation_dim=5) was found by sweeping both
+# dimensions independently and confirming a genuine 2D optimum — moving
+# either dimension away from this point in either direction makes it worse.
+# Kept here as the starting point for the next round of investigation, not
+# as a final answer.
 BEST_CONFIG = {
     "update_scheme": "batch",
     "lr_schedule": PAPER_SCHEDULE,
@@ -49,6 +60,8 @@ BEST_CONFIG = {
     "target_encoding": "multihot",
     "encoding_nonlinearity": "sigmoid",
     "w1_init_range": 0.3,
+    "person_encoding_dim": 1,
+    "relation_encoding_dim": 5,
     "n_sweeps": 6000,
     "seed": 42,
 }
@@ -182,7 +195,11 @@ def run_experiment(config, verbose=True):
     behavior — online updates, no decay, masked loss, fixed lr=0.01/momentum=0,
     split targets, linear encoding, w1 init range 1.0, 1500 sweeps):
 
-      update_scheme:          "online" | "batch"        (default "online")
+      update_scheme:          "online" | "batch" | "minibatch"  (default "online")
+      batch_size:              int — chunk size for "minibatch" scheme; one
+                               accumulated optimizer.step() per chunk. Only
+                               used when update_scheme="minibatch".
+                                                                    (default None)
       decay_rate:              float, None, or a dict {"encoding": rate_or_None,
                                "output": rate_or_None} for layer-specific rates
                                                           (default None)
@@ -201,6 +218,14 @@ def run_experiment(config, verbose=True):
       target_encoding:         "split" | "multihot"       (default "split")
       encoding_nonlinearity:   "linear" | "sigmoid"       (default "linear")
       w1_init_range:           float                      (default 1.0)
+      encoding_dim:            int — width of C1/C2 (paper: 6); a capacity
+                               bottleneck lever, independent of decay.
+                                                                    (default 6)
+      person_encoding_dim:     int or None — overrides encoding_dim for C1
+                               only, to test asymmetric person/relation splits.
+                                                                    (default None)
+      relation_encoding_dim:   int or None — overrides encoding_dim for C2 only.
+                                                                    (default None)
       n_sweeps:                int                        (default 1500)
       seed:                    int                        (default 42)
       log_every:               int                        (default 100)
@@ -208,6 +233,7 @@ def run_experiment(config, verbose=True):
     Returns a dict with final_loss, test_correct, test_total, and model.
     """
     update_scheme     = config.get("update_scheme", "online")
+    batch_size        = config.get("batch_size", None)
     decay_rate        = config.get("decay_rate", None)
     decay_scope       = config.get("decay_scope", "output_only")
     decay_start_sweep = config.get("decay_start_sweep", 1)
@@ -217,6 +243,9 @@ def run_experiment(config, verbose=True):
     target_encoding   = config.get("target_encoding", "split")
     encoding_nonlin   = config.get("encoding_nonlinearity", "linear")
     w1_init_range     = config.get("w1_init_range", 1.0)
+    encoding_dim      = config.get("encoding_dim", 6)
+    person_enc_dim    = config.get("person_encoding_dim", None)
+    relation_enc_dim  = config.get("relation_encoding_dim", None)
     n_sweeps          = config.get("n_sweeps", 1500)
     seed              = config.get("seed", 42)
     log_every         = config.get("log_every", 100)
@@ -229,7 +258,8 @@ def run_experiment(config, verbose=True):
         print(f"Train: {len(train_examples)} examples ({target_encoding}) | Test: {len(test_triples)} triples")
         print(f"\nStarting Training ({n_sweeps} Sweeps)...")
 
-    model = TreeNet(encoding_nonlinearity=encoding_nonlin, w1_init_range=w1_init_range)
+    model = TreeNet(encoding_nonlinearity=encoding_nonlin, w1_init_range=w1_init_range, encoding_dim=encoding_dim,
+                     person_encoding_dim=person_enc_dim, relation_encoding_dim=relation_enc_dim)
 
     # decay_groups: list of (params, rate) pairs. A dict decay_rate gives
     # c1/c2 and w1/w2 independent rates; a plain float applies one rate to
@@ -279,29 +309,34 @@ def run_experiment(config, verbose=True):
         random.shuffle(train_examples)
         total_loss = 0.0
 
-        if update_scheme == "batch":
+        # Unified update scheme: chunk the sweep's examples into groups that
+        # each get one accumulated optimizer.step(). "online" = chunks of 1,
+        # "batch" = one chunk of everything, "minibatch" = chunks of
+        # batch_size — all three are the same mechanism at different scales.
+        if update_scheme == "online":
+            chunk_size = 1
+        elif update_scheme == "minibatch":
+            chunk_size = batch_size
+        elif update_scheme == "batch":
+            chunk_size = len(train_examples)
+        else:
+            raise ValueError(f"Unknown update_scheme: {update_scheme!r}")
+
+        for start in range(0, len(train_examples), chunk_size):
+            chunk = train_examples[start:start + chunk_size]
             optimizer.zero_grad()
 
-        for p1_idx, rel_idx, target_idxs in train_examples:
-            if update_scheme == "online":
-                optimizer.zero_grad()
+            for p1_idx, rel_idx, target_idxs in chunk:
+                p1t, rt = encode(p1_idx, rel_idx)
+                target = torch.zeros(1, 24)
+                for idx in target_idxs:
+                    target[0, idx] = 1.0
 
-            p1t, rt = encode(p1_idx, rel_idx)
-            target = torch.zeros(1, 24)
-            for idx in target_idxs:
-                target[0, idx] = 1.0
+                output = model(p1t, rt)
+                loss = compute_loss(output, target, use_masked_loss)
+                loss.backward()
+                total_loss += loss.item()
 
-            output = model(p1t, rt)
-            loss = compute_loss(output, target, use_masked_loss)
-            loss.backward()
-
-            if update_scheme == "online":
-                optimizer.step()
-                apply_decay(sweep)
-
-            total_loss += loss.item()
-
-        if update_scheme == "batch":
             optimizer.step()
             apply_decay(sweep)
 

@@ -1,10 +1,64 @@
 # Rumelhart 1986 Family Tree — Findings So Far
 
-Status: **not yet a working reproduction.** Best result to date is a stable
-~0.29 mean activation on held-out test triples (individual triples up to
-~0.45), well short of the 0.8 threshold needed to count as a pass. This doc
-consolidates what's been established so the next round of investigation can
-build on it instead of re-deriving it.
+Status: **not yet a working reproduction.** Best result to date is ~0.35
+mean activation on held-out test triples (individual triples 0.33-0.37,
+tightly clustered), well short of the 0.8 threshold needed to count as a
+pass. This doc consolidates what's been established so the next round of
+investigation can build on it instead of re-deriving it.
+
+## Dataset bugs found and fixed (read this first — invalidates earlier numbers)
+
+Before trusting any test-set number in this doc, note: **the original
+`TEST_TRIPLES` and `TRIPLES` had real data bugs**, found by cross-checking
+every relation against an independently-derived family graph (father/mother/
+husband/wife as ground truth, gender inferred from consistent role usage,
+son/daughter/sibling/uncle/aunt/nephew/niece all algorithmically derived and
+diffed against what was actually stored).
+
+1. **2 of the original 4 test triples weren't real facts.**
+   `(Penelope, mother, Victoria)` had the relation backwards — every other
+   use of "mother" in the dataset is `(child, mother, parent)`, and here
+   Victoria is Penelope's *daughter*, not her mother. `(Charlotte, aunt,
+   Christine)` was simply false — Christine is Charlotte's grandmother, not
+   an aunt; Charlotte's real aunts are Jennifer and Margaret. Confirmed by
+   checking `TRIPLES[(p1, rel)]` directly: neither key/value existed. This
+   silently corrupted every test metric in this document until now — e.g.
+   re-evaluating a trained `BEST_CONFIG` model on only the 2 legitimate
+   original triples jumped mean test activation from 0.29 to 0.43.
+
+2. **The training set (`TRIPLES`) was missing 4 real facts.** Jennifer
+   (James's sister, Colin/Charlotte's blood aunt) and Angela (Marco's
+   sister, Alfonse/Sophia's blood aunt — the exact isomorphic mirror of the
+   Jennifer case) were both missing their `nephew`/`niece` entries, while
+   their in-law counterparts (Margaret/Charles, Gina/Tomaso) had theirs.
+   Same omission in both trees, so likely systematic rather than a one-off
+   typo. Fixed by adding `(Jennifer, nephew, Colin)`, `(Jennifer, niece,
+   Charlotte)`, `(Angela, nephew, Alfonse)`, `(Angela, niece, Sophia)`.
+   **This brought the dataset from 100 unique keys to exactly 104** —
+   matching the paper's own "trained on 100 of the 104 possible triples"
+   precisely. What the original debugging notes called "a documented
+   ambiguity, not a bug" (100 keys vs. paper's 104) was in fact this exact
+   bug.
+
+`TEST_TRIPLES` now uses two isomorphism-mirrored multi-answer pairs: `(Colin,
+uncle, Arthur)`/`(Alfonse, uncle, Emilio)` (unchanged, always valid) and
+`(Charlotte, aunt, Margaret)`/`(Sophia, aunt, Gina)` (replacing the two
+invalid triples). Re-running `BEST_CONFIG` on the corrected dataset gives:
+
+```
+(Colin, uncle) -> Arthur:      0.3916
+(Alfonse, uncle) -> Emilio:    0.3692
+(Charlotte, aunt) -> Margaret: 0.1992
+(Sophia, aunt) -> Gina:        0.2028
+```
+
+Mean (0.2907) lands close to the old, corrupted 0.2896 by coincidence, but
+the composition is now fully meaningful: a real, consistent split where
+"uncle" queries generalize roughly 2x better than "aunt" queries, mirrored
+almost exactly across the English/Italian isomorphism in each case
+(Colin≈Alfonse, Charlotte≈Sophia) — good evidence the isomorphism-sharing
+mechanism is real, but a genuine "uncle vs. aunt" asymmetry to still
+understand, not measurement noise.
 
 ## Two corrections to how the paper was being read
 
@@ -100,8 +154,118 @@ Notably: for this config, exact decay onset timing (tested: start sweep
 equilibrium (~0.289 in all three) — confirms rate, not timing, is the
 dominant lever, same as the linear-encoding case.
 
+**Caveat on the two tables above**: both were measured against the
+*original, since-corrected* `TEST_TRIPLES` (2 of 4 invalid, see top of this
+doc). They're kept as-is because the qualitative findings (monotonic
+tradeoff; sigmoid beats linear at every matched rate; onset timing doesn't
+matter) are relative comparisons using a consistently-applied metric, so
+almost certainly still hold — but the absolute numbers should be treated as
+approximate until re-measured on the corrected test set.
+
+## Beyond decay: looking for a genuinely different lever
+
+Every decay variant above operates on the same mechanism — shrinking weight
+*magnitude*. To find something that isn't just another point on that same
+frontier, we deliberately looked for mechanisms that act on something else.
+
+**Ruled out on principle, not just practically**: an explicit loss term
+pulling English/Italian counterparts' `c1` rows toward each other. The paper
+never describes such a term — it explicitly frames the isomorphism-sharing
+in Fig. 4 as *emergent* from generic error-minimization + decay, not
+engineered in ("the features captured by the hidden units are not at all
+explicit in the input and output encodings... because the hidden features
+capture the underlying structure of the task domain, the network generalizes
+correctly"). Adding a hand-crafted similarity term would manufacture the
+metric without reproducing the actual phenomenon, so this was deliberately
+not tried.
+
+**Mini-batch training** (chunked gradient accumulation between pure-online
+and full-batch — new `update_scheme="minibatch"` + `batch_size`) turned out
+to be genuinely different from decay: it improves generalization through
+gradient noise, not weight magnitude, and — critically — **doesn't force
+training accuracy to collapse the way every decay config does.** Mapped
+across batch sizes (no decay, sigmoid encoding, `w1_init_range=0.3`):
+
+| batch_size | train correct | test mean act |
+|---|---|---|
+| 1 (online) | 89.4% | 0.185 |
+| 4 | 98.1% | 0.205 |
+| 8 | 98.1% | 0.207 |
+| 16 | 98.1% | 0.196 |
+| 32 | 96.2% | **0.225** |
+| 52 | 95.2% | 0.176 |
+| 104 (full batch) | 100% | 0.123 |
+
+A real middle-is-best curve, not monotonic in either direction — both
+extremes underperform the 4-32 plateau. `batch_size=32` is the best single
+no-decay point found. Stacking mini-batch with decay (after fixing a real
+calibration bug — decay fires once per chunk, so mini-batch applies it ~13x
+more often per sweep than full-batch at the same nominal rate; the target
+rate must be scaled by `steps_per_sweep`-th root to compare fairly) does
+**not** help — it only erodes training accuracy without any test gain.
+Mini-batch noise and weight decay seem to compete for the same ground rather
+than compound.
+
+**Encoding-layer capacity bottleneck** (`encoding_dim` in `TreeNet`, paper
+value 6) is mechanistically different from both: a hard architectural limit
+rather than a soft penalty. Alone (no decay), `encoding_dim=3` gets 84%
+train / 0.221 test — also beats the no-decay baseline. Combined with decay,
+unlike mini-batch, it **does** compound favorably: `encoding_dim=3` + decay
+reached 0.306 (peak 0.345), beating decay alone (0.291).
+
+**Asymmetric person/relation split was the biggest win of this round.**
+`encoding_dim` had always been applied symmetrically to `c1` (person, 24
+inputs) and `c2` (relation, 12 inputs) — `TreeNet` now accepts
+`person_encoding_dim`/`relation_encoding_dim` independently. Sweeping both
+dimensions (with decay, total capacity varied freely, not fixed at 6):
+
+| person_dim | relation_dim | test mean act |
+|---|---|---|
+| 5 | 1 | 0.199 |
+| 4 | 2 | 0.210 |
+| 3 | 3 | 0.306 |
+| 2 | 4 | 0.294 |
+| **1** | **5** | **0.350 (best)** |
+| 1 | 6 | 0.326 |
+| 1 | 7 | 0.330 |
+| 1 | 8 | 0.324 |
+| 2 | 5 | 0.257 |
+| 3 | 5 | 0.214 |
+
+`person_dim=1, relation_dim=5` is a confirmed 2D optimum — moving either
+dimension away from this point in either direction makes it worse. This is
+now `BEST_CONFIG`: 0.350 mean test activation, individual triples 0.33-0.37
+(tightly clustered — the uncle/aunt asymmetry from before is largely gone at
+this operating point), 11/104 train. Counter to the naive assumption that
+person (24 inputs) needs more room than relation (12 inputs), the opposite
+is true: relation type carries more of the compositional structure the
+network needs space for (parent/child direction, generation-hop, gender,
+spousal-vs-blood), while person identity compresses down almost trivially —
+plausibly because Fig. 4's own analysis found person identity reduces to
+only ~2-3 meaningful dimensions (nationality, generation, branch) in the
+first place.
+
 ## Open questions for next time
 
+- **Re-validate the decay-rate frontier tables from the earlier sections on
+  the corrected `TEST_TRIPLES`** — those numbers predate the dataset fix;
+  the asymmetric-split and bottleneck+decay tables above are already
+  post-fix and trustworthy.
+- **Why does relation consistently outperform person at every tested split?**
+  Confirmed as a real, consistent pattern, not yet explained mechanistically
+  — worth inspecting what `c2`'s 5 learned dimensions actually encode
+  (visualize like Fig. 4, once `visualize.py` exists) to see if it maps onto
+  interpretable relationship structure (direction, generation, gender).
+- **The uncle/aunt asymmetry mostly disappeared at the new optimum** (0.33-
+  0.37 across all four, vs. the earlier ~0.4/~0.2 split) — worth confirming
+  this holds up as more than a coincidence of this one config, since it was
+  flagged as a real open question before this round and seems to have
+  resolved itself without being directly targeted.
+- **Kept in reserve from the architecture brainstorm, not yet tried**:
+  widening the penultimate hidden layer (paper: 6, never varied) to test
+  whether the bottleneck's benefit is specific to the identity-encoding
+  layer or just "less capacity anywhere"; replacing `concat` with a bilinear
+  person×relation interaction instead of `concat → linear`.
 - **Sigmoid encoding's own decay-rate frontier isn't fully mapped past
   0.998** — does going stronger (0.997, 0.995, as was tried for linear
   encoding) improve it further, or plateau the same way?

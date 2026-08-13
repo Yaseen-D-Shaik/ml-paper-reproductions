@@ -106,6 +106,8 @@ TRIPLES = {
     ("Jennifer", "mother"):         ["Christine"],
     ("Jennifer", "husband"):        ["Charles"],
     ("Jennifer", "brother"):        ["James"],
+    ("Jennifer", "nephew"):         ["Colin"],
+    ("Jennifer", "niece"):          ["Charlotte"],
 
     # Charles (gen 2, married into branch 2)
     ("Charles", "wife"):            ["Jennifer"],
@@ -190,6 +192,8 @@ TRIPLES = {
     ("Angela", "mother"):           ["Francesca"],
     ("Angela", "husband"):          ["Tomaso"],
     ("Angela", "brother"):          ["Marco"],
+    ("Angela", "nephew"):           ["Alfonse"],
+    ("Angela", "niece"):            ["Sophia"],
 
     # Tomaso (gen 2, married into branch 2)
     ("Tomaso", "wife"):             ["Angela"],

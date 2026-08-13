@@ -2,8 +2,9 @@
 
 Architecture follows Figure 3 of Rumelhart, Hinton & Williams (1986):
   - Input: person1 (24-dim one-hot) + relationship (12-dim one-hot)
-  - Layer 2: two separate 6-unit groups, one per input group (Eq. 1, 2)
-  - Layer 3: central 12-unit layer (concatenation of both 6-unit groups)
+  - Layer 2: two separate encoding_dim-unit groups, one per input group
+    (Eq. 1, 2). Paper uses 6; configurable here as a capacity-bottleneck lever.
+  - Layer 3: central 2*encoding_dim-unit layer (concatenation of both groups)
   - Layer 4: penultimate 6-unit layer
   - Output: 24-unit layer, one per person
 
@@ -19,28 +20,38 @@ import torch.nn as nn
 
 class TreeNet(nn.Module):
 
-    def __init__(self, encoding_nonlinearity="linear", w1_init_range=0.3):
+    def __init__(self, encoding_nonlinearity="linear", w1_init_range=0.3,
+                 encoding_dim=6, person_encoding_dim=None, relation_encoding_dim=None):
         """
         encoding_nonlinearity: "linear" or "sigmoid" — whether C1/C2 outputs
             pass through a sigmoid (paper's Eq. 1+2 applied uniformly to all
             layers) or stay linear (current working assumption).
         w1_init_range: uniform init bound for w1, i.e. U(-w1_init_range, w1_init_range).
             Paper specifies 0.3 for all weights; current code deviates to 1.0.
+        encoding_dim: width of the C1/C2 encoding layers (paper: 6). A capacity
+            bottleneck lever — smaller values force more compression than
+            weight decay's magnitude penalty does, independent of it. Used
+            symmetrically for both C1 and C2 unless overridden below.
+        person_encoding_dim / relation_encoding_dim: override encoding_dim
+            independently for C1 (person) and C2 (relation), to test whether
+            an even split is actually optimal or just the default.
         """
         super().__init__()
         self.encoding_nonlinearity = encoding_nonlinearity
+        person_dim = person_encoding_dim if person_encoding_dim is not None else encoding_dim
+        relation_dim = relation_encoding_dim if relation_encoding_dim is not None else encoding_dim
 
         # Encoding layers — one per input group (Figure 3)
         # Paper: 24 person units -> 6 units, 12 relation units -> 6 units
-        self.c1 = nn.Parameter(torch.empty(24, 6))   # person encoding
-        self.c2 = nn.Parameter(torch.empty(12, 6))   # relation encoding
-        self.b_c1 = nn.Parameter(torch.zeros(6))
-        self.b_c2 = nn.Parameter(torch.zeros(6))
+        self.c1 = nn.Parameter(torch.empty(24, person_dim))     # person encoding
+        self.c2 = nn.Parameter(torch.empty(12, relation_dim))   # relation encoding
+        self.b_c1 = nn.Parameter(torch.zeros(person_dim))
+        self.b_c2 = nn.Parameter(torch.zeros(relation_dim))
 
         # Central and output layers (Figure 3)
-        # 12 -> 6 -> 24
-        self.w1 = nn.Parameter(torch.empty(12, 6))   # central -> penultimate
-        self.w2 = nn.Parameter(torch.empty(6, 24))   # penultimate -> output
+        # (person_dim + relation_dim) -> 6 -> 24
+        self.w1 = nn.Parameter(torch.empty(person_dim + relation_dim, 6))   # central -> penultimate
+        self.w2 = nn.Parameter(torch.empty(6, 24))                          # penultimate -> output
         self.b_w1 = nn.Parameter(torch.zeros(6))
         self.b_w2 = nn.Parameter(torch.zeros(24))
 
