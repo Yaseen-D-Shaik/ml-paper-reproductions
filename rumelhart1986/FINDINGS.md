@@ -1,10 +1,14 @@
 # Rumelhart 1986 Family Tree — Findings So Far
 
-Status: **not yet a working reproduction.** Best result to date is ~0.35
-mean activation on held-out test triples (individual triples 0.33-0.37,
-tightly clustered), well short of the 0.8 threshold needed to count as a
-pass. This doc consolidates what's been established so the next round of
-investigation can build on it instead of re-deriving it.
+Status: **not yet a working reproduction, but the first genuine improvement
+on both axes at once.** Best result to date is ~0.48 mean activation on
+held-out test triples (individual triples 0.43-0.52, tightly clustered) with
+22/104 training accuracy, using Grokfast-accelerated extended training (see
+"Grokking hypothesis" section below) — still well short of the 0.8 threshold
+needed to pass, but for the first time a config beats a previous best on
+*both* training accuracy and test performance simultaneously, rather than
+trading one for the other. This doc consolidates what's been established so
+the next round of investigation can build on it instead of re-deriving it.
 
 ## Dataset bugs found and fixed (read this first — invalidates earlier numbers)
 
@@ -320,51 +324,212 @@ number by brute-forcing more sweeps isn't a substitute for understanding
 *why* the plateau ends, or finding a mechanism that doesn't require this
 much wall-clock time to discover.
 
+## Multi-seed validation (done before investing further)
+
+Every result in this document up to this point used `seed=42` exclusively.
+Reran `BEST_CONFIG` (`person_dim=1, relation_dim=5`) and the symmetric
+`person_dim=3, relation_dim=3` baseline at 3 additional seeds:
+
+| seed | (1,5) test mean act | (3,3) test mean act |
+|---|---|---|
+| 42 | 0.350 | 0.306 |
+| 1 | 0.277 | 0.210 |
+| 7 | 0.278 | 0.278 (tied) |
+| 123 | 0.315 | 0.304 |
+
+**The direction holds**: `(1,5)` never underperforms `(3,3)` across any
+seed, so "relation needs more capacity than person" is a real, robust
+pattern, not a seed-42 coincidence. **The magnitude doesn't**: the advantage
+ranges from a clear ~14% relative improvement (seed 42) down to a dead tie
+(seed 7). Absolute test performance also swings substantially by seed
+regardless of architecture (0.21-0.35) — initialization has a large effect
+on final outcome in general. Takeaway: treat `0.350` as an upper bound on
+what this config typically achieves, not its expected performance — the
+4-seed average (~0.30) is the more honest number to compare future configs
+against.
+
+## Mechanism of the late-stage decline (interpretability, no-decay run)
+
+Snapshotted the `person_dim=1, relation_dim=5` no-decay model at sweeps
+3000 (peak), 15000 (plateau), 19000/25000/30000 (declining) and compared
+weights directly rather than guessing:
+
+- **`b_w2` (output bias) grows continuously and never plateaus**: mean
+  -1.59 -> -9.72, std 0.98 -> 8.75 across the run, even as `c1`/`w1` level
+  off after their initial growth. A bias term doesn't depend on input at
+  all, so growing it is the "cheap" way to fit training examples (memorize
+  each output unit's marginal frequency) without any relational reasoning.
+- **Sibling pairs that should encode almost identically drift apart in
+  `c1`.** Colin/Charlotte (same generation, same branch, nearly identical
+  facts except the relations that must distinguish them — `sister`/
+  `brother`, `nephew`/`niece`-as-target) start at c1 gap 0.26 (sweep 3000)
+  and reach gap 5.34 by sweep 30000; the isomorphic Alfonse/Sophia pair
+  shows the same pattern (0.08 -> 4.70). Plausible mechanism: masking
+  silences gradient from their many *shared* facts once satisfied, leaving
+  the few facts that *require* differentiation to dominate the remaining
+  active gradient later in training — eroding the shared representation
+  that the test triples (themselves shared-type `uncle`/`aunt` queries)
+  depend on for generalization. (Reasoned through but not directly
+  verified against per-fact mask-crossing timestamps — see caveat below.)
+- The uncle/aunt-vs-nephew/niece gender-axis alignment (same metric used to
+  explain the earlier person/relation-split fix) **degrades in lockstep
+  with test performance**: cosine similarity 0.863 (sweep 3000, peak) ->
+  0.606 (sweep 25000, declined).
+
+**Two follow-up experiments, both negative results — ruled out rather than
+fixed:**
+
+- **Disabling masking** (`use_masked_loss=False`) lets training accuracy
+  climb higher/faster (86/104 vs. ~56-60/104) but generalization collapses
+  far harder: test mean act 0.065 at 30000 sweeps, two of four triples
+  driven to *exactly* 0.0000. Masking is confirmed necessary, not part of
+  the problem — it was already doing real, load-bearing work.
+- **Decay applied only to `b_w2`** (rate 0.999, everything else
+  unconstrained) reaches an even higher peak than doing nothing (0.474 vs.
+  0.456) but still declines afterward, settling at 0.259 by sweep 30000 —
+  *worse* than the plain no-decay run at the same sweep count. Bias growth
+  alone isn't sufficient to explain the decline; `c1`/`c2`/`w1`/`w2` growing
+  unconstrained reproduces the same pattern on their own.
+
+**Where this leaves the "understand before fixing" thread**: real
+mechanistic understanding was gained (bias-driven memorization is real and
+visible; masking is necessary; sibling-pair drift is a plausible but
+unverified contributor), but neither follow-up experiment produced an
+actual improvement. Diminishing returns on tuning the loss/decay mechanism
+as a category — the two untried items below are different in kind, not
+another variation on this theme.
+
 ## Candidate paths forward (prioritized, as of this consolidation)
 
-The core unresolved problem: every config found so far sits on a frontier
-trading training accuracy against test performance. Nothing has broken that
-tradeoff — only found better and better points on it. Ranked by how directly
-each one attacks *that*, rather than just re-tuning a knob we already
-understand:
+The original core problem — every config sitting on a train/test tradeoff
+frontier — has been *partially* broken by Grokfast + `rate=0.9995` (see
+below), the first result to beat a previous best on both axes at once. Not
+solved (still 0/4 at the 0.8 threshold), but the framing has shifted:
 
-1. **Understand the mechanism of the late-stage decline, rather than just
-   reacting to it with decay.** We know *when* the plateau ends (~sweep
-   18,000-19,000) but not *why*. Same interpretability approach that found
-   the generation-axis and gender-axis structure earlier — snapshot the
-   model at sweep 15,000 (plateau, good) vs. 25,000 (declined) and compare
-   `c1`/`c2`/`w2` directly. Is the clean generation-axis structure in `c1`
-   degrading? Is `w2` starting to encode person-specific shortcuts? This is
-   the most likely path to a fix that isn't just another decay-rate guess.
-2. **Multi-seed validation.** Every result in this entire document —
-   including the person/relation split search and the plateau itself — used
-   `seed=42` exclusively. We don't know yet whether `person_dim=1,
-   relation_dim=5` and its wide plateau are robust properties of this task,
-   or a lucky draw from one initialization. Cheap to check (rerun
-   `BEST_CONFIG` and the no-decay trajectory at 2-3 more seeds), and it
-   either solidifies everything above or reveals it's fragile — either way,
-   worth knowing before investing more in this exact config.
-3. **Weight averaging across the plateau.** We found a wide, stable region
-   (sweeps ~3000-17000) where test performance holds near its peak while
-   training keeps climbing. Averaging weight snapshots from several points
-   within that plateau (stochastic weight averaging) is a well-established
-   technique for exactly this situation — it might yield a single model
-   better than any individual snapshot, without more sweeps or decay tuning.
-4. **The two architecture ideas kept in reserve**: widening the penultimate
-   hidden layer (paper: 6, never varied — would tell us whether the
-   bottleneck's benefit is specific to identity-encoding or just "less
-   capacity anywhere"), and replacing `concat` with a bilinear person×
-   relation interaction. Deliberately not tried yet since we wanted to
-   understand the person/relation split first — now that we do (relation
-   carries more of the compositional load), these are informed rather than
-   speculative choices.
+1. ~~Multi-seed validation~~ **DONE**. ~~Understand the late-stage decline
+   mechanism~~ **DONE, informed the grokking hypothesis below**. ~~Hidden
+   layer width~~ **DONE, hidden_dim=20 beats paper's 6, not yet combined
+   with Grokfast**. See their sections above for details.
+2. **[Current priority] Isolate the Grokfast pre-decay stall.** Grokfast
+   pins test at ~0.195 for the entire pre-decay window (~16,000 sweeps),
+   identically across all three decay rates tested — clearly a real,
+   reproducible property of Grokfast-during-undecayed-training, not
+   explained yet. Cheapest next test: apply Grokfast only from decay onset
+   instead of sweep 1 — if the stall disappears and the good result still
+   emerges (or emerges faster), that isolates the cause and likely shortens
+   the path to an even better config.
+3. **Combine Grokfast with the hidden_dim=20 finding and the reserved
+   bilinear-interaction architecture change.** These were found/proposed
+   independently of the Grokfast thread — stacking a better architecture
+   with a working training recipe is the natural next multiplier, not
+   already tested.
+4. **Weight averaging (SWA)** across the post-decay region once a good
+   Grokfast trajectory is in hand — the late-training oscillation seen in
+   these runs (train bouncing 15-30/104 sweep to sweep) is exactly the kind
+   of noisy-but-good region SWA is meant to smooth into a single better model.
 5. **Smaller, more mechanical follow-ups**: layer-specific decay rates were
    only tested under linear encoding, never sigmoid; `w1_init_range` and
    `encoding_nonlinearity` were only ever changed together, never isolated;
    the decay-rate frontier tables from early sections predate the
    `TEST_TRIPLES` fix and should be re-measured for trustworthy absolute
-   numbers (the asymmetric-split and bottleneck+decay tables are already
-   post-fix).
+   numbers (the asymmetric-split, bottleneck+decay, and Grokfast tables are
+   already post-fix).
+
+## Hidden layer width matters too (partial architecture follow-up)
+
+Before the deep-research pivot below, a quick sweep of `hidden_dim` (the
+penultimate layer, paper: 6, newly made configurable) at `BEST_CONFIG`'s
+(pre-Grokfast) decay recipe found a non-monotonic curve with a peak well
+above the paper's spec:
+
+| hidden_dim | train | test mean act |
+|---|---|---|
+| 4 | 3/104 | 0.237 |
+| 6 (paper) | 11/104 | 0.350 |
+| 8 | 7/104 | 0.325 |
+| 12 | 8/104 | 0.371 |
+| 16 | 5/104 | 0.373 |
+| 20 | 8/104 | **0.384** |
+| 24 | 10/104 | 0.370 |
+
+This answers the question the hidden-layer idea was reserved to test: the
+capacity bottleneck's benefit is specific to the *identity-encoding* layer
+(`c1`/`c2`), not "less capacity anywhere" — squeezing the penultimate layer
+(`hidden_dim=4`) hurts, while widening it beyond the paper's 6 helps further,
+peaking around 20. Plausible mechanism: compressed identity encoding forces
+more of the actual relational logic (which traversal, which gender filter)
+into the combination step, which benefits from more room to do that work.
+Not yet combined with the Grokfast results below — worth revisiting.
+
+## Grokking hypothesis: the deep-research pivot
+
+After the architecture/interpretability threads hit diminishing returns
+(masking and bias-only-decay follow-ups both came back negative — see
+above), the user asked for a literature-grounded pass rather than continued
+hand-tuning: given everything tried sits on one train/test tradeoff frontier,
+what does the broader ML research on this *class* of problem say?
+
+**Finding**: this project's setup — a small, discrete, compositionally
+structured dataset (104 facts) trained with weight decay on a small network
+— closely matches the conditions for **"grokking"** (Power et al. 2022,
+"Grokking: Generalization Beyond Overfitting on Small Algorithmic
+Datasets"): networks on small algorithmic/symbolic datasets often memorize
+first (training accuracy saturates, test stays low), then — often 10-100x
+more steps later — undergo a comparatively sudden transition to real
+generalization. Weight decay (toward the origin, which is what this project
+already implements) is reported as the single largest driver of this
+transition. Later mechanistic work explains why: gradient descent forms a
+high-norm "memorizing circuit" and a lower-norm "generalizing circuit";
+decay continuously penalizes norm, and once the generalizing circuit is
+capable of solving the task, decay preferentially erodes the memorizing one
+— at which point train and test move together rather than trading off.
+Critically, **steps-to-grok scale inversely with decay strength** (one study:
+~13k steps at strong decay vs. ~98k at weak decay).
+
+This re-explains three previously puzzling results without new experiments:
+`rate=0.998` (strong) shock-collapsed and flatlined — plausibly too strong/
+fast for a smooth transition; `rate=0.999` (medium) collapsed then
+*recovered and kept climbing*, still rising at sweep 30,000 — the exact
+signature of a transition in progress; `rate=0.9995` (weak) collapsed and
+flatlined early — consistent with needing far more steps than given.
+
+**Grokfast** (Lee et al. 2024) accelerates grokking up to ~44x on
+algorithmic data via a per-parameter EMA gradient filter applied before the
+optimizer step: `μ ← α·μ + (1-α)·g; ĝ ← g + λ·μ`. Implemented in
+`run_experiment` as `grokfast_alpha`/`grokfast_lambda` (default `None`/off,
+verified behavior-identical to before when disabled).
+
+### Results: real improvement, with an unexplained wrinkle
+
+Re-ran the sweep-16000 decay-onset experiment (`person_dim=1,
+relation_dim=5`) with Grokfast (`alpha=0.98, lambda=2.0`) across three decay
+rates, extended to 35,000 sweeps:
+
+| decay rate | train | test mean act (final) | best single triple |
+|---|---|---|---|
+| 0.998 | 12/104 (11.5%) | 0.419 | 0.446 |
+| 0.999 | 24/104 (23.1%) | 0.389 | **0.505** |
+| **0.9995** | **23/104 (22.1%)** | **0.476** | **0.524** |
+
+`rate=0.9995` — previously the *weakest* performer without Grokfast — is now
+the best result of the entire investigation: 0.476 mean test activation
+(individual triples 0.43-0.52, tightly clustered) at 22.1% train, beating
+the old `BEST_CONFIG` (0.350 test, 10.6% train) **on both axes at once**.
+This is the first config in the whole project to do that rather than sit on
+the same tradeoff curve. Now `BEST_CONFIG`.
+
+**The wrinkle**: Grokfast changes the *pre-decay* dynamics unexpectedly.
+Without Grokfast, this architecture normally reaches ~0.42-0.45 test by
+sweep 3000 and holds a wide plateau through sweep 17000 (see "Where
+convergence actually stands" above). With Grokfast active from sweep 1, test
+is instead pinned at ~0.195 (the mask-collapse floor) for the *entire*
+16,000-sweep pre-decay window, identically across all three decay rates —
+confirming it's a Grokfast-during-undecayed-training property, not a
+decay-rate artifact. The post-decay recovery is clearly real and produces
+the best results yet, but *why* Grokfast stalls the undecayed phase this way
+is not understood — flagged as the natural next thing to isolate (e.g. does
+applying Grokfast only from decay onset, rather than sweep 1, avoid the
+stall and reach an equally good or better result faster?).
 
 ## Harness reference
 

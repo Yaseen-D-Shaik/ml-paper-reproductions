@@ -21,7 +21,8 @@ import torch.nn as nn
 class TreeNet(nn.Module):
 
     def __init__(self, encoding_nonlinearity="linear", w1_init_range=0.3,
-                 encoding_dim=6, person_encoding_dim=None, relation_encoding_dim=None):
+                 encoding_dim=6, person_encoding_dim=None, relation_encoding_dim=None,
+                 hidden_dim=6):
         """
         encoding_nonlinearity: "linear" or "sigmoid" — whether C1/C2 outputs
             pass through a sigmoid (paper's Eq. 1+2 applied uniformly to all
@@ -35,6 +36,10 @@ class TreeNet(nn.Module):
         person_encoding_dim / relation_encoding_dim: override encoding_dim
             independently for C1 (person) and C2 (relation), to test whether
             an even split is actually optimal or just the default.
+        hidden_dim: width of the penultimate layer (paper: 6). Varying this
+            independently of encoding_dim tests whether a capacity bottleneck's
+            benefit is specific to the identity-encoding layer or just "less
+            capacity anywhere in the network."
         """
         super().__init__()
         self.encoding_nonlinearity = encoding_nonlinearity
@@ -49,10 +54,10 @@ class TreeNet(nn.Module):
         self.b_c2 = nn.Parameter(torch.zeros(relation_dim))
 
         # Central and output layers (Figure 3)
-        # (person_dim + relation_dim) -> 6 -> 24
-        self.w1 = nn.Parameter(torch.empty(person_dim + relation_dim, 6))   # central -> penultimate
-        self.w2 = nn.Parameter(torch.empty(6, 24))                          # penultimate -> output
-        self.b_w1 = nn.Parameter(torch.zeros(6))
+        # (person_dim + relation_dim) -> hidden_dim -> 24
+        self.w1 = nn.Parameter(torch.empty(person_dim + relation_dim, hidden_dim))  # central -> penultimate
+        self.w2 = nn.Parameter(torch.empty(hidden_dim, 24))                         # penultimate -> output
+        self.b_w1 = nn.Parameter(torch.zeros(hidden_dim))
         self.b_w2 = nn.Parameter(torch.zeros(24))
 
         # Initialize all weights uniformly in [-0.3, 0.3] (paper specification)
@@ -68,18 +73,18 @@ class TreeNet(nn.Module):
         returns:      (1, 24) output activations
         """
         # Equation 1 + 2 applied at encoding layers
-        p_repr = person1 @ self.c1 + self.b_c1       # (1, 6)
-        r_repr = relationship @ self.c2 + self.b_c2   # (1, 6)
+        p_repr = person1 @ self.c1 + self.b_c1        # (1, person_dim)
+        r_repr = relationship @ self.c2 + self.b_c2   # (1, relation_dim)
         if self.encoding_nonlinearity == "sigmoid":
             p_repr = torch.sigmoid(p_repr)
             r_repr = torch.sigmoid(r_repr)
 
         # Concatenate into central layer input (Figure 3)
-        combined = torch.cat([p_repr, r_repr], dim=1)                # (1, 12)
+        combined = torch.cat([p_repr, r_repr], dim=1)                 # (1, person_dim + relation_dim)
 
         # Central -> penultimate -> output (Eq. 1, 2)
-        hidden = torch.sigmoid(combined @ self.w1 + self.b_w1)       # (1, 6)
-        output = torch.sigmoid(hidden @ self.w2 + self.b_w2)         # (1, 24)
+        hidden = torch.sigmoid(combined @ self.w1 + self.b_w1)        # (1, hidden_dim)
+        output = torch.sigmoid(hidden @ self.w2 + self.b_w2)          # (1, 24)
 
         return output
 

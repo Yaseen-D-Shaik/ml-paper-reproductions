@@ -40,29 +40,33 @@ PAPER_SCHEDULE = [(20, 0.005, 0.5), (float("inf"), 0.01, 0.9)]
 # change" -> multiply by (1 - 0.002) after each update.
 PAPER_DECAY_RATE = 0.998
 
-# Best-known config as of the decay/architecture investigation (see
-# rumelhart1986/FINDINGS.md). Reaches ~0.35 mean test activation (individual
-# triples 0.33-0.37, tightly clustered) but 11/104 train and 0/4 test at the
-# 0.8 pass threshold — NOT a converged reproduction yet. The asymmetric
-# encoding split (person_dim=1, relation_dim=5) was found by sweeping both
-# dimensions independently and confirming a genuine 2D optimum — moving
-# either dimension away from this point in either direction makes it worse.
-# Kept here as the starting point for the next round of investigation, not
-# as a final answer.
+# Best-known config as of the Grokfast investigation (see FINDINGS.md).
+# Reaches ~0.48 mean test activation (individual triples 0.43-0.52, tightly
+# clustered) with 22/104 train — NOT a converged reproduction yet (0/4 test
+# at the 0.8 pass threshold), but the first config to beat a previous best on
+# BOTH training accuracy and test performance simultaneously rather than
+# trading one for the other. Uses Grokfast (Lee et al. 2024) gradient-EMA
+# amplification from sweep 1, with decay engaging at sweep 16000 once the
+# no-decay plateau (found separately, see FINDINGS.md) has run its course.
+# Note: Grokfast causes an unexplained ~16000-sweep stall before decay
+# kicks in (test pinned at ~0.195) — the eventual result is good despite
+# this, but the stall itself is not understood yet.
 BEST_CONFIG = {
     "update_scheme": "batch",
     "lr_schedule": PAPER_SCHEDULE,
-    "decay_rate": PAPER_DECAY_RATE,
+    "decay_rate": 0.9995,
     "decay_scope": "all",
-    "decay_start_sweep": 2000,
-    "decay_ramp_sweeps": 250,
+    "decay_start_sweep": 16000,
+    "decay_ramp_sweeps": 1000,
     "use_masked_loss": True,
     "target_encoding": "multihot",
     "encoding_nonlinearity": "sigmoid",
     "w1_init_range": 0.3,
     "person_encoding_dim": 1,
     "relation_encoding_dim": 5,
-    "n_sweeps": 6000,
+    "grokfast_alpha": 0.98,
+    "grokfast_lambda": 2.0,
+    "n_sweeps": 35000,
     "seed": 42,
 }
 
@@ -226,6 +230,18 @@ def run_experiment(config, verbose=True):
                                                                     (default None)
       relation_encoding_dim:   int or None — overrides encoding_dim for C2 only.
                                                                     (default None)
+      hidden_dim:              int — width of the penultimate layer (paper: 6);
+                               a second capacity lever, independent of encoding_dim.
+                                                                    (default 6)
+      grokfast_alpha:          float or None — EMA filter coefficient for
+                               Grokfast gradient amplification (Lee et al.
+                               2024), typical range [0.8, 0.99]. None disables
+                               Grokfast entirely (default behavior unaffected).
+                                                                    (default None)
+      grokfast_lambda:         float — amplification strength for the EMA'd
+                               gradient component, typical range [0.1, 5.0].
+                               Only used when grokfast_alpha is not None.
+                                                                    (default 2.0)
       n_sweeps:                int                        (default 1500)
       seed:                    int                        (default 42)
       log_every:               int                        (default 100)
@@ -246,6 +262,9 @@ def run_experiment(config, verbose=True):
     encoding_dim      = config.get("encoding_dim", 6)
     person_enc_dim    = config.get("person_encoding_dim", None)
     relation_enc_dim  = config.get("relation_encoding_dim", None)
+    hidden_dim        = config.get("hidden_dim", 6)
+    grokfast_alpha    = config.get("grokfast_alpha", None)
+    grokfast_lambda   = config.get("grokfast_lambda", 2.0)
     n_sweeps          = config.get("n_sweeps", 1500)
     seed              = config.get("seed", 42)
     log_every         = config.get("log_every", 100)
@@ -259,7 +278,8 @@ def run_experiment(config, verbose=True):
         print(f"\nStarting Training ({n_sweeps} Sweeps)...")
 
     model = TreeNet(encoding_nonlinearity=encoding_nonlin, w1_init_range=w1_init_range, encoding_dim=encoding_dim,
-                     person_encoding_dim=person_enc_dim, relation_encoding_dim=relation_enc_dim)
+                     person_encoding_dim=person_enc_dim, relation_encoding_dim=relation_enc_dim,
+                     hidden_dim=hidden_dim)
 
     # decay_groups: list of (params, rate) pairs. A dict decay_rate gives
     # c1/c2 and w1/w2 independent rates; a plain float applies one rate to
@@ -278,6 +298,23 @@ def run_experiment(config, verbose=True):
 
     current_lr, current_momentum = lr_momentum_for_sweep(1, lr_schedule)
     optimizer = optim.SGD(model.parameters(), lr=current_lr, momentum=current_momentum)
+
+    # Grokfast (Lee et al. 2024): amplify the slow-varying (EMA) component of
+    # each parameter's gradient before the optimizer step. mu <- alpha*mu +
+    # (1-alpha)*g; g_hat <- g + lambda*mu. Accelerates the memorize-to-
+    # generalize transition seen in grokking on small algorithmic datasets.
+    grokfast_ema = {p: torch.zeros_like(p) for p in model.parameters()} if grokfast_alpha is not None else None
+
+    def apply_grokfast():
+        if grokfast_ema is None:
+            return
+        with torch.no_grad():
+            for p in model.parameters():
+                if p.grad is None:
+                    continue
+                mu = grokfast_ema[p]
+                mu.mul_(grokfast_alpha).add_(p.grad, alpha=1 - grokfast_alpha)
+                p.grad.add_(mu, alpha=grokfast_lambda)
 
     spot_p1, spot_rel = encode(PEOPLE.index("Christopher"), RELATIONSHIPS.index("wife"))
     spot_target_idx = PEOPLE.index("Penelope")
@@ -337,6 +374,7 @@ def run_experiment(config, verbose=True):
                 loss.backward()
                 total_loss += loss.item()
 
+            apply_grokfast()
             optimizer.step()
             apply_decay(sweep)
 
