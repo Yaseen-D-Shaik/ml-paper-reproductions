@@ -233,6 +233,11 @@ def run_experiment(config, verbose=True):
       hidden_dim:              int — width of the penultimate layer (paper: 6);
                                a second capacity lever, independent of encoding_dim.
                                                                     (default 6)
+      hidden_nonlinearity:     "sigmoid" | "tanh" — activation for the w1
+                               (central->penultimate) layer only; other
+                               reproductions of this task found tanh here
+                               necessary to avoid vanishing gradient through
+                               a multi-layer sigmoid chain.  (default "sigmoid")
       grokfast_alpha:          float or None — EMA filter coefficient for
                                Grokfast gradient amplification (Lee et al.
                                2024), typical range [0.8, 0.99]. None disables
@@ -242,6 +247,11 @@ def run_experiment(config, verbose=True):
                                gradient component, typical range [0.1, 5.0].
                                Only used when grokfast_alpha is not None.
                                                                     (default 2.0)
+      grokfast_start_sweep:    int — Grokfast only engages from this sweep
+                               onward (EMA buffer starts accumulating here).
+                               Lets Grokfast be applied only during/after
+                               decay rather than from sweep 1.
+                                                                    (default 1)
       n_sweeps:                int                        (default 1500)
       seed:                    int                        (default 42)
       log_every:               int                        (default 100)
@@ -263,8 +273,10 @@ def run_experiment(config, verbose=True):
     person_enc_dim    = config.get("person_encoding_dim", None)
     relation_enc_dim  = config.get("relation_encoding_dim", None)
     hidden_dim        = config.get("hidden_dim", 6)
+    hidden_nonlin     = config.get("hidden_nonlinearity", "sigmoid")
     grokfast_alpha    = config.get("grokfast_alpha", None)
     grokfast_lambda   = config.get("grokfast_lambda", 2.0)
+    grokfast_start    = config.get("grokfast_start_sweep", 1)
     n_sweeps          = config.get("n_sweeps", 1500)
     seed              = config.get("seed", 42)
     log_every         = config.get("log_every", 100)
@@ -279,7 +291,7 @@ def run_experiment(config, verbose=True):
 
     model = TreeNet(encoding_nonlinearity=encoding_nonlin, w1_init_range=w1_init_range, encoding_dim=encoding_dim,
                      person_encoding_dim=person_enc_dim, relation_encoding_dim=relation_enc_dim,
-                     hidden_dim=hidden_dim)
+                     hidden_dim=hidden_dim, hidden_nonlinearity=hidden_nonlin)
 
     # decay_groups: list of (params, rate) pairs. A dict decay_rate gives
     # c1/c2 and w1/w2 independent rates; a plain float applies one rate to
@@ -305,8 +317,8 @@ def run_experiment(config, verbose=True):
     # generalize transition seen in grokking on small algorithmic datasets.
     grokfast_ema = {p: torch.zeros_like(p) for p in model.parameters()} if grokfast_alpha is not None else None
 
-    def apply_grokfast():
-        if grokfast_ema is None:
+    def apply_grokfast(sweep):
+        if grokfast_ema is None or sweep < grokfast_start:
             return
         with torch.no_grad():
             for p in model.parameters():
@@ -374,7 +386,7 @@ def run_experiment(config, verbose=True):
                 loss.backward()
                 total_loss += loss.item()
 
-            apply_grokfast()
+            apply_grokfast(sweep)
             optimizer.step()
             apply_decay(sweep)
 

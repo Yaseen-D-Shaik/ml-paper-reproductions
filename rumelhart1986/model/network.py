@@ -22,7 +22,7 @@ class TreeNet(nn.Module):
 
     def __init__(self, encoding_nonlinearity="linear", w1_init_range=0.3,
                  encoding_dim=6, person_encoding_dim=None, relation_encoding_dim=None,
-                 hidden_dim=6):
+                 hidden_dim=6, hidden_nonlinearity="sigmoid"):
         """
         encoding_nonlinearity: "linear" or "sigmoid" — whether C1/C2 outputs
             pass through a sigmoid (paper's Eq. 1+2 applied uniformly to all
@@ -40,9 +40,18 @@ class TreeNet(nn.Module):
             independently of encoding_dim tests whether a capacity bottleneck's
             benefit is specific to the identity-encoding layer or just "less
             capacity anywhere in the network."
+        hidden_nonlinearity: "sigmoid" (paper) or "tanh" — activation for the
+            central->penultimate layer (w1) only. With sigmoid encoding and
+            sigmoid output, this network has a 3-deep sigmoid chain; other
+            reproductions of this task found sigmoid'(0)=0.25 compounds across
+            layers (0.25^4 ~ 0.004) and switched an interior layer to tanh
+            (wider derivative range) to keep gradient reaching the encoding
+            layer. Output stays sigmoid regardless, since compute_loss's
+            0/1 targets and 0.8/0.2 masked threshold assume that range.
         """
         super().__init__()
         self.encoding_nonlinearity = encoding_nonlinearity
+        self.hidden_nonlinearity = hidden_nonlinearity
         person_dim = person_encoding_dim if person_encoding_dim is not None else encoding_dim
         relation_dim = relation_encoding_dim if relation_encoding_dim is not None else encoding_dim
 
@@ -83,7 +92,8 @@ class TreeNet(nn.Module):
         combined = torch.cat([p_repr, r_repr], dim=1)                 # (1, person_dim + relation_dim)
 
         # Central -> penultimate -> output (Eq. 1, 2)
-        hidden = torch.sigmoid(combined @ self.w1 + self.b_w1)        # (1, hidden_dim)
+        pre_hidden = combined @ self.w1 + self.b_w1                   # (1, hidden_dim)
+        hidden = torch.tanh(pre_hidden) if self.hidden_nonlinearity == "tanh" else torch.sigmoid(pre_hidden)
         output = torch.sigmoid(hidden @ self.w2 + self.b_w2)          # (1, 24)
 
         return output
