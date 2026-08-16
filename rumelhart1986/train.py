@@ -238,6 +238,12 @@ def run_experiment(config, verbose=True):
                                reproductions of this task found tanh here
                                necessary to avoid vanishing gradient through
                                a multi-layer sigmoid chain.  (default "sigmoid")
+      use_bilinear:            bool — replace concat+w1 with a bilinear
+                               person x relation interaction instead of an
+                               additive combination.        (default False)
+      init_scheme:             "uniform" (paper: fixed U(-0.3,0.3)) | "xavier"
+                               (Glorot uniform, scaled per layer width).
+                                                                    (default "uniform")
       grokfast_alpha:          float or None — EMA filter coefficient for
                                Grokfast gradient amplification (Lee et al.
                                2024), typical range [0.8, 0.99]. None disables
@@ -274,6 +280,8 @@ def run_experiment(config, verbose=True):
     relation_enc_dim  = config.get("relation_encoding_dim", None)
     hidden_dim        = config.get("hidden_dim", 6)
     hidden_nonlin     = config.get("hidden_nonlinearity", "sigmoid")
+    use_bilinear      = config.get("use_bilinear", False)
+    init_scheme       = config.get("init_scheme", "uniform")
     grokfast_alpha    = config.get("grokfast_alpha", None)
     grokfast_lambda   = config.get("grokfast_lambda", 2.0)
     grokfast_start    = config.get("grokfast_start_sweep", 1)
@@ -291,7 +299,8 @@ def run_experiment(config, verbose=True):
 
     model = TreeNet(encoding_nonlinearity=encoding_nonlin, w1_init_range=w1_init_range, encoding_dim=encoding_dim,
                      person_encoding_dim=person_enc_dim, relation_encoding_dim=relation_enc_dim,
-                     hidden_dim=hidden_dim, hidden_nonlinearity=hidden_nonlin)
+                     hidden_dim=hidden_dim, hidden_nonlinearity=hidden_nonlin, use_bilinear=use_bilinear,
+                     init_scheme=init_scheme)
 
     # decay_groups: list of (params, rate) pairs. A dict decay_rate gives
     # c1/c2 and w1/w2 independent rates; a plain float applies one rate to
@@ -408,7 +417,8 @@ def run_experiment(config, verbose=True):
     test_correct, test_total, test_mean_target, test_mean_nontarget = \
         evaluate(model, test_triples, label="HELD-OUT TEST TRIPLES", verbose=verbose)
 
-    weight_norms = {name: getattr(model, name).norm().item() for name in ["c1", "c2", "w1", "w2"]}
+    central_param_name = "bilinear" if use_bilinear else "w1"
+    weight_norms = {name: getattr(model, name).norm().item() for name in ["c1", "c2", central_param_name, "w2"]}
     if verbose:
         print(f"Final weight norms: {', '.join(f'{k}={v:.4f}' for k, v in weight_norms.items())}")
 

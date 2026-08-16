@@ -1,13 +1,16 @@
 # Rumelhart 1986 Family Tree — Findings So Far
 
 Status: **not yet a working reproduction, but the first genuine improvement
-on both axes at once.** Best result to date is ~0.48 mean activation on
-held-out test triples (individual triples 0.43-0.52, tightly clustered) with
-22/104 training accuracy, using Grokfast-accelerated extended training (see
-"Grokking hypothesis" section below) — still well short of the 0.8 threshold
-needed to pass, but for the first time a config beats a previous best on
-*both* training accuracy and test performance simultaneously, rather than
-trading one for the other. This doc consolidates what's been established so
+on both axes at once, and now measured against a real external benchmark.**
+Best result to date is ~0.48 mean activation on held-out test triples
+(individual triples 0.43-0.52, tightly clustered) with 22/104 training
+accuracy, using Grokfast-accelerated extended training (see "Grokking
+hypothesis" below) — still short of any test triple crossing 0.8. Research
+into other reproduction attempts of this same paper (see "External
+validation" below) found none converge in the paper's stated 1500 sweeps
+either, all needed substantial deviations, and the realistic bar to beat is
+their **1.9-2/4 average / 3/4 best**, not an assumed 4/4 — this project's
+own goal is to exceed that. This doc consolidates what's been established so
 the next round of investigation can build on it instead of re-deriving it.
 
 ## Dataset bugs found and fixed (read this first — invalidates earlier numbers)
@@ -401,39 +404,47 @@ another variation on this theme.
 
 ## Candidate paths forward (prioritized, as of this consolidation)
 
-The original core problem — every config sitting on a train/test tradeoff
-frontier — has been *partially* broken by Grokfast + `rate=0.9995` (see
-below), the first result to beat a previous best on both axes at once. Not
-solved (still 0/4 at the 0.8 threshold), but the framing has shifted:
+Goal is now explicit (see "External validation" above): beat the 1.9-2/4
+average / 3/4 best that other faithful reproductions of this paper achieve —
+`BEST_CONFIG`'s best single triple (0.524) is already ~65% of the way to a
+first pass. Settled/closed threads: multi-seed validation (pre-Grokfast),
+late-stage-decline mechanism, the Grokfast pre-decay stall (real, but not
+worth removing), `hidden_dim`/`tanh`, and Grokfast's own `alpha`/`lambda`
+(all real ideas, none combine with or improve on the current recipe — five
+independent directions now converge on `BEST_CONFIG` being a genuine local
+optimum, see sections above). Remaining, ranked by expected leverage:
 
-1. ~~Multi-seed validation~~ **DONE**. ~~Understand the late-stage decline
-   mechanism~~ **DONE, informed the grokking hypothesis below**. ~~Hidden
-   layer width~~ **DONE, hidden_dim=20 beats paper's 6, not yet combined
-   with Grokfast**. See their sections above for details.
-2. **[Current priority] Isolate the Grokfast pre-decay stall.** Grokfast
-   pins test at ~0.195 for the entire pre-decay window (~16,000 sweeps),
-   identically across all three decay rates tested — clearly a real,
-   reproducible property of Grokfast-during-undecayed-training, not
-   explained yet. Cheapest next test: apply Grokfast only from decay onset
-   instead of sweep 1 — if the stall disappears and the good result still
-   emerges (or emerges faster), that isolates the cause and likely shortens
-   the path to an even better config.
-3. **Combine Grokfast with the hidden_dim=20 finding and the reserved
-   bilinear-interaction architecture change.** These were found/proposed
-   independently of the Grokfast thread — stacking a better architecture
-   with a working training recipe is the natural next multiplier, not
-   already tested.
-4. **Weight averaging (SWA)** across the post-decay region once a good
-   Grokfast trajectory is in hand — the late-training oscillation seen in
-   these runs (train bouncing 15-30/104 sweep to sweep) is exactly the kind
-   of noisy-but-good region SWA is meant to smooth into a single better model.
-5. **Smaller, more mechanical follow-ups**: layer-specific decay rates were
-   only tested under linear encoding, never sigmoid; `w1_init_range` and
-   `encoding_nonlinearity` were only ever changed together, never isolated;
-   the decay-rate frontier tables from early sections predate the
-   `TEST_TRIPLES` fix and should be re-measured for trustworthy absolute
-   numbers (the asymmetric-split, bottleneck+decay, and Grokfast tables are
-   already post-fix).
+1. **[Current priority] Multi-seed validation of the *Grokfast* `BEST_CONFIG`
+   specifically.** The earlier multi-seed check (0.28-0.35 range) was on the
+   pre-Grokfast config; given how seed-sensitive every external reproduction
+   also turned out to be (40-60% success rates) and how consistently narrow
+   this local optimum has proven, it's not yet known whether 0.476 is
+   typical or a favorable draw for this exact recipe — important to know
+   before investing further in it specifically.
+2. **The bilinear person×relation interaction** — the one remaining
+   genuinely different *architectural* idea (replacing `concat` with a
+   multiplicative interaction) rather than another nudge around the current
+   optimum. Now informed by both the person/relation asymmetry finding and
+   five negative nudge-results suggesting small parameter changes won't be
+   enough.
+3. **Try Xavier/Glorot init** instead of the paper's uniform `[-0.3, 0.3]` —
+   cheap, single-parameter, and `cybertronai`'s reproduction used it as part
+   of what got them to 1.9/4.
+4. **Pei Guo's "hard label" trick** — targets of 1.1/-0.1 instead of 1.0/0.0
+   (forces more separation before the mask threshold's 0.8/0.2 line is
+   crossed) — reported as a real, if modest, improvement in that
+   reproduction. Cheap to test, touches `compute_loss`/target construction
+   only.
+5. **Weight averaging (SWA)** across the post-decay region — the late-
+   training oscillation seen throughout the Grokfast runs (train bouncing
+   sweep to sweep) is exactly the kind of noisy-but-good region SWA is meant
+   to smooth into a single better model. Apply once a strong trajectory is
+   confirmed stable (after 1 above), not as a first move.
+6. **Smaller, more mechanical follow-ups**: layer-specific decay rates were
+   only tested under linear encoding, never sigmoid; the decay-rate frontier
+   tables from early sections predate the `TEST_TRIPLES` fix and should be
+   re-measured for trustworthy absolute numbers (the asymmetric-split,
+   bottleneck+decay, and Grokfast tables are already post-fix).
 
 ## Hidden layer width matters too (partial architecture follow-up)
 
@@ -459,7 +470,9 @@ capacity bottleneck's benefit is specific to the *identity-encoding* layer
 peaking around 20. Plausible mechanism: compressed identity encoding forces
 more of the actual relational logic (which traversal, which gender filter)
 into the combination step, which benefits from more room to do that work.
-Not yet combined with the Grokfast results below — worth revisiting.
+Later combined with the Grokfast recipe below — see "hidden_dim and tanh
+don't combine with the Grokfast recipe" — the combination underperformed,
+so this finding holds only in the pre-Grokfast context it was measured in.
 
 ## Grokking hypothesis: the deep-research pivot
 
@@ -525,11 +538,193 @@ convergence actually stands" above). With Grokfast active from sweep 1, test
 is instead pinned at ~0.195 (the mask-collapse floor) for the *entire*
 16,000-sweep pre-decay window, identically across all three decay rates —
 confirming it's a Grokfast-during-undecayed-training property, not a
-decay-rate artifact. The post-decay recovery is clearly real and produces
-the best results yet, but *why* Grokfast stalls the undecayed phase this way
-is not understood — flagged as the natural next thing to isolate (e.g. does
-applying Grokfast only from decay onset, rather than sweep 1, avoid the
-stall and reach an equally good or better result faster?).
+decay-rate artifact.
+
+**Isolating the stall (tested, resolved as a negative result)**: tried
+`grokfast_start_sweep=16000` (new config field — Grokfast only engages once
+its EMA buffer starts accumulating from that sweep, matching decay's own
+onset) to see if skipping the stall reaches an equally good or better result
+faster. Pre-16000, this run tracks the known no-decay plateau almost exactly
+(confirming the stall really is specific to Grokfast-during-undecayed-
+training). But the post-decay result was *worse*, not better: train ended
+higher (31/104 vs. 23/104) but test dropped (0.371 vs. 0.476) and the four
+triples split apart again (one hit 0.61, our best single number ever, while
+the two aunt queries collapsed back to ~0.20-0.22) — undoing the tight
+clustering the sweep-1-Grokfast version achieved. **Conclusion: the
+"wasted-looking" stall isn't wasted** — Grokfast's gradient-EMA state
+accumulating over that long undecayed window appears to matter for the
+*quality* of the post-decay transition, not just its timing. Keep Grokfast
+enabled from sweep 1 (current `BEST_CONFIG` default); don't adopt the
+stall-skipping variant despite it looking more "efficient" on paper.
+
+## External validation: how other reproductions of this exact paper fared
+
+Before pushing further, researched other attempts to reproduce this same
+1986 experiment, to get real calibration on what "success" should mean
+rather than assuming a strict 4/4-at-0.8 bar. Three independent sources:
+
+- **`cybertronai/hinton-problems`** (numpy, explicitly built for
+  paper-comparison metrics): used lr=0.5, momentum=0.9, **no weight decay at
+  all**, 10,000 epochs, Xavier init (not the paper's uniform[-0.3,0.3]), and
+  **tanh instead of sigmoid** for hidden layers, with an explicit
+  justification: *"sigmoid'(0) = 0.25, so a four-layer chain shrinks
+  gradients by 0.25⁴ ≈ 0.004."* Best seed: 100% train, 75% test (3/4).
+  Average across 10 seeds: **1.9/4 test correct**, and only 6/10 seeds reach
+  100% training accuracy. Their own stated calibration: *"Hinton (1986)
+  reported 2/4 on his hand-picked test set, so we consider 1.9/4 averaged
+  over random hold-outs a faithful match of the paper's generalization
+  regime."* (This 2/4 claim is from a third-party repo, not verified against
+  the primary Nature letter text directly — flagged as credible but not
+  fully confirmed.)
+- **Pei Guo's PyTorch reproduction**: used Adam/AdamW, gradient clipping, LR
+  warmup, deliberately deeper/wider layers than the paper's spec. Across 50
+  seeds: average accuracy 0.725, **only 20/50 (40%) reached perfect 4/4**.
+- **CompCogNeuro's textbook reimplementation** (Leabra, different learning
+  rule entirely) states: *"Hinton's original model used a much smaller
+  number of hidden units... over a very long training time, to force the
+  model to develop more systematic representations"* — an independent
+  confirmation of the exact mechanism found in this project (capacity
+  bottleneck + extended training), from people reproducing this for
+  teaching, not something invented by drifting off course.
+
+**Takeaway**: no serious reproduction attempt found trains anywhere close to
+1,500 sweeps or uses the paper's literal setup unmodified — all needed far
+more epochs and/or activation-function changes and/or abandoned weight decay
+entirely, and all show substantial seed-sensitivity (40-60% full-success
+rates, not 100%). Recalibrated goal: **beat the 1.9-2/4 average / 3/4 best
+external benchmark**, not an assumed-but-unverified 4/4.
+
+## The paper's literal recipe doesn't converge at all (tested directly)
+
+Tested the most paper-literal config possible on the corrected dataset:
+symmetric `encoding_dim=6`, `hidden_dim=6`, sigmoid throughout, paper's decay
+(`0.998`) starting at sweep 1 with no delay/ramp, 1500 sweeps — exactly as
+the paper's text describes, no bottleneck, no Grokfast. Result: **0/104
+train, mean target act (0.1959) statistically indistinguishable from mean
+non-target act (0.1954)** — a completely undifferentiated network, weights
+crushed to near-zero (`c1` norm 0.16, `w2` norm 3.22). Decay from sweep 1
+overwhelms the still-weak early gradients before any structure can form —
+consistent with earlier findings about needing a delayed decay onset. This
+means **the speed gap to the paper's reported 1500 sweeps isn't explained by
+"unnecessary complexity" on this project's part** — the literal recipe fails
+completely, more totally than any of the elaborated configs. Combined with
+the external-validation section above (nobody else converges in 1500 sweeps
+either), the gap looks like it reflects something about the paper's actual
+implementation (loss normalization, init details, or something else not
+fully specified in a one-page Nature letter) that hasn't been identified,
+not a self-inflicted detour.
+
+## hidden_dim and tanh don't combine with the Grokfast recipe (tested, negative)
+
+Two externally-motivated ideas — `hidden_dim=20` (previously found to beat
+the paper's 6 in a pre-Grokfast context) and `tanh` for the w1/hidden layer
+(the fix `cybertronai`'s reproduction used for vanishing gradients through
+the sigmoid chain) — were stacked onto `BEST_CONFIG` and, separately,
+recalibrated with stronger decay:
+
+| variant | decay rate | train | test mean act |
+|---|---|---|---|
+| `BEST_CONFIG` (sigmoid, hidden_dim=6) | 0.9995 | 22/104 (21%) | **0.476** |
+| + `hidden_dim=20` | 0.9995 | 29/104 (28%) | 0.406 |
+| + `tanh` | 0.9995 | 43/104 (41%) | 0.337 |
+| + `tanh` | 0.999 | 26/104 (25%) | 0.332 |
+| + `tanh` | 0.998 (strongest) | 23/104 (22%) | 0.309 — **stronger decay made it worse** |
+| + both (`hidden_dim=20` + `tanh`) | 0.9995 | 72/104 (69%) | 0.151 |
+| + both | 0.999 | 45/104 (43%) | 0.177 |
+| + both | 0.998 (strongest) | 38/104 (37%) | 0.212 |
+
+Both ideas independently increase training capacity (more capacity, easier
+gradient flow) but *decrease* test performance versus `BEST_CONFIG`, even
+after direct recalibration across a 3x range of decay strength. For `tanh`
+alone, stronger decay made results monotonically *worse* on both axes —
+the opposite of what "just needs more decay pressure" would predict. For
+`both` combined, stronger decay helped somewhat (0.151→0.212) but never
+approached `BEST_CONFIG`. The mid-training logs for `both` show train and
+test visibly oscillating against each other sweep-to-sweep rather than
+transitioning smoothly, unlike `BEST_CONFIG`'s own trajectory.
+
+**Working hypothesis, not confirmed**: the sigmoid chain's vanishing
+gradient — which other reproductions treated purely as a problem — may be
+acting as an *implicit* capacity constraint in this specific recipe,
+analogous in spirit to the deliberate `person_dim=1` bottleneck that was the
+actual breakthrough earlier in this investigation. Removing it via `tanh`
+may remove something quietly load-bearing, not just a hindrance. Not
+pursued further for now — `BEST_CONFIG` (sigmoid, `hidden_dim=6`) remains
+the best-tested configuration.
+
+## Grokfast's own hyperparameters are also a local optimum (tested, negative)
+
+`BEST_CONFIG` has used `grokfast_alpha=0.98, grokfast_lambda=2.0` — one
+untuned point from the paper's recommended ranges ([0.8, 0.99], [0.1, 5.0])
+— throughout every result above. Swept both directions on each:
+
+| variant | train | test mean act |
+|---|---|---|
+| baseline (α=0.98, λ=2.0) | 22/104 (21%) | **0.476** |
+| α=0.90 | 26/104 (25%) | 0.358 |
+| α=0.99 | 34/104 (33%) | 0.285 |
+| λ=0.5 | 23/104 (22%) | 0.353 |
+| λ=1.0 | 24/104 (23%) | 0.374 |
+| λ=5.0 | 27/104 (26%) | 0.284 |
+
+Every direction tested — both alpha values, all three lambda values — made
+test performance worse while nudging training accuracy up, the same
+shape as the `tanh`/`hidden_dim` results above. `(0.98, 2.0)` looks like a
+genuine local optimum, not an unexamined default. **Combined with the
+`hidden_dim`/`tanh` results, this is now a consistent pattern across five
+independent directions (wider hidden layer, tanh, weaker/stronger Grokfast
+alpha, weaker/stronger lambda): every adjacent move away from `BEST_CONFIG`
+trades test performance for more training capacity.** Further gains look
+less likely to come from parameter nudges around this recipe, and more
+likely to need either a genuinely different architectural change (the
+bilinear interaction, still untried) or confirmation that this optimum is
+even stable across seeds (multi-seed validation of the Grokfast config,
+also still pending — see "Candidate paths forward").
+
+## Multi-seed validation of the Grokfast recipe (tested, reassuring)
+
+Reran `BEST_CONFIG` at seeds 1, 7, 123 (matching the earlier pre-Grokfast
+validation seeds for direct comparison):
+
+| seed | train | test mean act |
+|---|---|---|
+| 42 (original) | 22/104 (21%) | 0.476 |
+| 1 | 30/104 (29%) | 0.419 |
+| 7 | 28/104 (27%) | 0.406 |
+| 123 | 20/104 (19%) | 0.417 |
+
+**Much tighter and higher than the pre-Grokfast spread.** The old
+`BEST_CONFIG` ranged 0.277-0.350 across these same seeds (one seed showing
+zero advantage over the plain symmetric baseline); the Grokfast version
+ranges 0.406-0.476 — every seed here beats every seed the old config ever
+achieved, average ~0.43 vs. the old ~0.30. The Grokfast recipe's improvement
+is real and robust, not a `seed=42` fluke, though 42 remains the best draw.
+Still 0/4 above 0.8 on every seed — the external benchmark (at least one
+triple passing) hasn't been matched yet, but the trend and stability are
+both genuinely positive.
+
+## Bilinear person x relation interaction (tested, negative — sixth confirmation)
+
+`TreeNet` now supports `use_bilinear=True`: replaces `concat(p_repr, r_repr)
+@ w1` with a learned 3-tensor contraction `einsum('bi,ijk,bj->bk', p, B, r)`,
+letting each relation-feature modulate each person-feature directly instead
+of only combining additively. On top of `BEST_CONFIG`: **30/104 train (29%),
+0.388 test mean act** — worse than concat's 0.476, same train-up/test-down
+shape as every other variant tried. This is the **sixth independent
+direction** (wider hidden layer, tanh, Grokfast alpha up/down, Grokfast
+lambda variations, bilinear interaction) that trades test performance for
+more expressive power/training capacity, with decay/Grokfast held at their
+`BEST_CONFIG` calibration. Strong, comprehensive evidence that `BEST_CONFIG`
+is a genuine local optimum specifically resistant to "give the network more
+capacity" changes — further gains likely need a lever that doesn't add
+capacity at all (see "Candidate paths forward").
+
+(Implementation note: adding `use_bilinear` initially changed the RNG draw
+order for `c1`/`c2`/`w1`'s `nn.init.uniform_` calls, silently breaking exact
+reproducibility of every prior recorded result for the same seed — caught by
+the project's standing discipline of re-verifying `BEST_CONFIG`'s exact
+output after every harness change, and fixed by keeping `c1`/`c2`/`w2`
+initialized before `w1`/`bilinear`, matching the original order.)
 
 ## Harness reference
 
