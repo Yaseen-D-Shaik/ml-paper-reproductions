@@ -1,133 +1,58 @@
-"""Neural network architecture for the Rumelhart 1986 reproduction.
+"""TreeNet — final architecture for the Rumelhart et al. (1986) family-tree
+reproduction.
 
-Architecture follows Figure 3 of Rumelhart, Hinton & Williams (1986):
-  - Input: person1 (24-dim one-hot) + relationship (12-dim one-hot)
-  - Layer 2: two separate encoding_dim-unit groups, one per input group
-    (Eq. 1, 2). Paper uses 6; configurable here as a capacity-bottleneck lever.
-  - Layer 3: central 2*encoding_dim-unit layer (concatenation of both groups)
-  - Layer 4: penultimate 6-unit layer
-  - Output: 24-unit layer, one per person
+Follows Figure 3 of the paper: person1 and relationship each arrive as a
+local (one-hot) code, get compressed by their own encoding layer, are
+concatenated into a central representation, pass through a penultimate
+layer, and expand back out into a local code over all 24 people.
 
-encoding_params() / output_params() split the parameters into two groups so
-train.py can apply weight decay to either group independently — decay scope
-(all params vs. output-layer-only) is one of the axes under investigation,
-not a fixed architectural decision.
+Two deliberate departures from the paper's literal spec, both empirically
+load-bearing rather than arbitrary (see TECHNIQUES.md for the experiments
+that established them):
+
+- PERSON_DIM/RELATION_DIM are 1 and 5, not the paper's even 6/6 split. This
+  asymmetric bottleneck is what let the person encoding organize cleanly by
+  generation and nationality (see TECHNIQUES.md's "capacity bottleneck"
+  section) — a 6/6 split left the network too much room to memorize instead
+  of compress.
+- The encoding layers (c1/c2) pass through a sigmoid, not a linear
+  pass-through — this keeps the network a uniform sigmoid chain end to end,
+  which is what actually trains well here despite the vanishing-gradient
+  risk that motivated other reproductions to switch to tanh instead (see
+  TECHNIQUES.md — tanh was tried on this project's setup and hurt).
 """
 
 import torch
 import torch.nn as nn
 
+N_PEOPLE = 24
+N_RELATIONS = 12
+PERSON_DIM = 1
+RELATION_DIM = 5
+HIDDEN_DIM = 6
+INIT_RANGE = 0.3  # paper: fixed uniform(-0.3, 0.3) for every weight
+
 
 class TreeNet(nn.Module):
 
-    def __init__(self, encoding_nonlinearity="linear", w1_init_range=0.3,
-                 encoding_dim=6, person_encoding_dim=None, relation_encoding_dim=None,
-                 hidden_dim=6, hidden_nonlinearity="sigmoid", use_bilinear=False,
-                 init_scheme="uniform", hidden_dim2=None):
-        """
-        encoding_nonlinearity: "linear" or "sigmoid" — whether C1/C2 outputs
-            pass through a sigmoid (paper's Eq. 1+2 applied uniformly to all
-            layers) or stay linear (current working assumption).
-        w1_init_range: uniform init bound for w1, i.e. U(-w1_init_range, w1_init_range).
-            Paper specifies 0.3 for all weights; current code deviates to 1.0.
-        encoding_dim: width of the C1/C2 encoding layers (paper: 6). A capacity
-            bottleneck lever — smaller values force more compression than
-            weight decay's magnitude penalty does, independent of it. Used
-            symmetrically for both C1 and C2 unless overridden below.
-        person_encoding_dim / relation_encoding_dim: override encoding_dim
-            independently for C1 (person) and C2 (relation), to test whether
-            an even split is actually optimal or just the default.
-        hidden_dim: width of the penultimate layer (paper: 6). Varying this
-            independently of encoding_dim tests whether a capacity bottleneck's
-            benefit is specific to the identity-encoding layer or just "less
-            capacity anywhere in the network."
-        hidden_nonlinearity: "sigmoid" (paper) or "tanh" — activation for the
-            central->penultimate layer (w1) only. With sigmoid encoding and
-            sigmoid output, this network has a 3-deep sigmoid chain; other
-            reproductions of this task found sigmoid'(0)=0.25 compounds across
-            layers (0.25^4 ~ 0.004) and switched an interior layer to tanh
-            (wider derivative range) to keep gradient reaching the encoding
-            layer. Output stays sigmoid regardless, since compute_loss's
-            0/1 targets and 0.8/0.2 masked threshold assume that range.
-        use_bilinear: if True, replace concat+w1 with a bilinear person x
-            relation interaction (a learned 3-tensor B[person_dim,
-            relation_dim, hidden_dim] contracted against both representations)
-            instead of concatenating them into one linear layer. Concatenation
-            only allows additive combinations of person-features and
-            relation-features; a bilinear form lets each relation-feature
-            modulate each person-feature directly, which paper's Fig. 3
-            "central layer" doesn't literally specify but is a structurally
-            richer way to combine two heavily compressed signals.
-        init_scheme: "uniform" (paper: fixed U(-0.3,0.3) everywhere,
-            regardless of layer width) or "xavier" (Glorot uniform: bound
-            scales with 1/sqrt(fan_in+fan_out) per layer, keeping initial
-            signal variance comparable across layers of very different width
-            — relevant here since person_dim/relation_dim/hidden_dim can now
-            differ enormously, unlike the paper's uniform 6/6/6/24 shape).
-        hidden_dim2: if not None, insert a second hidden layer of this width
-            between the existing penultimate layer and the output (depth
-            instead of width — a genuinely different kind of capacity than
-            hidden_dim, which only ever tested making the single hidden
-            layer wider). None (default) reproduces the original single-
-            hidden-layer architecture exactly.
-        """
+    def __init__(self):
         super().__init__()
-        self.encoding_nonlinearity = encoding_nonlinearity
-        self.hidden_nonlinearity = hidden_nonlinearity
-        self.use_bilinear = use_bilinear
-        person_dim = person_encoding_dim if person_encoding_dim is not None else encoding_dim
-        relation_dim = relation_encoding_dim if relation_encoding_dim is not None else encoding_dim
+        self.c1 = nn.Parameter(torch.empty(N_PEOPLE, PERSON_DIM))       # person encoding
+        self.c2 = nn.Parameter(torch.empty(N_RELATIONS, RELATION_DIM))  # relation encoding
+        self.b_c1 = nn.Parameter(torch.zeros(PERSON_DIM))
+        self.b_c2 = nn.Parameter(torch.zeros(RELATION_DIM))
 
-        # Encoding layers — one per input group (Figure 3)
-        # Paper: 24 person units -> 6 units, 12 relation units -> 6 units
-        self.c1 = nn.Parameter(torch.empty(24, person_dim))     # person encoding
-        self.c2 = nn.Parameter(torch.empty(12, relation_dim))   # relation encoding
-        self.b_c1 = nn.Parameter(torch.zeros(person_dim))
-        self.b_c2 = nn.Parameter(torch.zeros(relation_dim))
+        self.w2 = nn.Parameter(torch.empty(HIDDEN_DIM, N_PEOPLE))       # penultimate -> output
+        self.b_w1 = nn.Parameter(torch.zeros(HIDDEN_DIM))
+        self.b_w2 = nn.Parameter(torch.zeros(N_PEOPLE))
 
-        # Central and output layers (Figure 3)
-        # If hidden_dim2 is set, w2 reads from the second hidden layer instead.
-        self.w2 = nn.Parameter(torch.empty(hidden_dim2 if hidden_dim2 is not None else hidden_dim, 24))
-        self.b_w1 = nn.Parameter(torch.zeros(hidden_dim))
-        self.b_w2 = nn.Parameter(torch.zeros(24))
+        self.w1 = nn.Parameter(torch.empty(PERSON_DIM + RELATION_DIM, HIDDEN_DIM))  # central -> penultimate
 
-        def init_(param, uniform_bound):
-            if init_scheme == "xavier":
-                nn.init.xavier_uniform_(param)
-            else:
-                nn.init.uniform_(param, a=-uniform_bound, b=uniform_bound)
-
-        # Initialize all weights (paper: fixed U(-0.3,0.3) everywhere).
-        # This loop must stay ordered/positioned exactly as before adding
-        # use_bilinear, and w1/bilinear init must stay last — the RNG draw
-        # order affects the actual values assigned for a given seed, and
-        # every recorded result in FINDINGS.md depends on this exact sequence.
-        for param in [self.c1, self.c2, self.w2]:
-            init_(param, 0.3)
-
-        if use_bilinear:
-            # B[i, j, k]: contribution of person-feature i and relation-feature
-            # j to hidden unit k. hidden_pre = einsum('bi,ijk,bj->bk', p, B, r)
-            self.bilinear = nn.Parameter(torch.empty(person_dim, relation_dim, hidden_dim))
-            init_(self.bilinear, w1_init_range)
-            self.w1 = None
-        else:
-            # (person_dim + relation_dim) -> hidden_dim, central -> penultimate
-            self.w1 = nn.Parameter(torch.empty(person_dim + relation_dim, hidden_dim))
-            init_(self.w1, w1_init_range)
-            self.bilinear = None
-
-        self.hidden_dim2 = hidden_dim2
-        if hidden_dim2 is not None:
-            # Second hidden layer: hidden_dim -> hidden_dim2. Initialized
-            # last so configs with hidden_dim2=None (the default) keep the
-            # exact original RNG draw order and stay reproducible.
-            self.w1b = nn.Parameter(torch.empty(hidden_dim, hidden_dim2))
-            self.b_w1b = nn.Parameter(torch.zeros(hidden_dim2))
-            init_(self.w1b, w1_init_range)
-        else:
-            self.w1b = None
-            self.b_w1b = None
+        # Init order (c1, c2, w2, w1) matches every recorded result in
+        # FINDINGS.md for seed=42 — changing it changes the actual values
+        # drawn for a given seed, not just cosmetically.
+        for p in [self.c1, self.c2, self.w2, self.w1]:
+            nn.init.uniform_(p, a=-INIT_RANGE, b=INIT_RANGE)
 
     def forward(self, person1, relationship):
         """
@@ -135,50 +60,17 @@ class TreeNet(nn.Module):
         relationship: (1, 12) one-hot tensor
         returns:      (1, 24) output activations
         """
-        # Equation 1 + 2 applied at encoding layers
-        p_repr = person1 @ self.c1 + self.b_c1        # (1, person_dim)
-        r_repr = relationship @ self.c2 + self.b_c2   # (1, relation_dim)
-        if self.encoding_nonlinearity == "sigmoid":
-            p_repr = torch.sigmoid(p_repr)
-            r_repr = torch.sigmoid(r_repr)
-
-        if self.use_bilinear:
-            # Each relation-feature modulates each person-feature directly,
-            # instead of the two only ever being combined additively.
-            pre_hidden = torch.einsum("bi,ijk,bj->bk", p_repr, self.bilinear, r_repr) + self.b_w1
-        else:
-            # Concatenate into central layer input (Figure 3)
-            combined = torch.cat([p_repr, r_repr], dim=1)              # (1, person_dim + relation_dim)
-            pre_hidden = combined @ self.w1 + self.b_w1                # (1, hidden_dim)
-
-        # Central -> penultimate -> output (Eq. 1, 2)
-        hidden = torch.tanh(pre_hidden) if self.hidden_nonlinearity == "tanh" else torch.sigmoid(pre_hidden)
-
-        if self.hidden_dim2 is not None:
-            pre_hidden2 = hidden @ self.w1b + self.b_w1b               # (1, hidden_dim2)
-            hidden = torch.tanh(pre_hidden2) if self.hidden_nonlinearity == "tanh" else torch.sigmoid(pre_hidden2)
-
-        output = torch.sigmoid(hidden @ self.w2 + self.b_w2)          # (1, 24)
-
-        return output
-
-    def encoding_params(self):
-        """Parameters that should NOT receive weight decay."""
-        return [self.c1, self.c2, self.b_c1, self.b_c2]
-
-    def output_params(self):
-        """Parameters that receive weight decay (Eq. 9 + paper decay rule)."""
-        central_to_hidden = self.bilinear if self.use_bilinear else self.w1
-        params = [central_to_hidden, self.w2, self.b_w1, self.b_w2]
-        if self.hidden_dim2 is not None:
-            params += [self.w1b, self.b_w1b]
-        return params
+        p_repr = torch.sigmoid(person1 @ self.c1 + self.b_c1)
+        r_repr = torch.sigmoid(relationship @ self.c2 + self.b_c2)
+        combined = torch.cat([p_repr, r_repr], dim=1)
+        hidden = torch.sigmoid(combined @ self.w1 + self.b_w1)
+        return torch.sigmoid(hidden @ self.w2 + self.b_w2)
 
 
-def encode(person_idx, relation_idx, n_people=24, n_relations=12):
-    """Convert integer indices to one-hot tensors with batch dimension."""
-    person_onehot = torch.zeros(1, n_people)
+def encode(person_idx, relation_idx):
+    """Convert integer indices to one-hot tensors with a batch dimension."""
+    person_onehot = torch.zeros(1, N_PEOPLE)
     person_onehot[0, person_idx] = 1.0
-    rel_onehot = torch.zeros(1, n_relations)
+    rel_onehot = torch.zeros(1, N_RELATIONS)
     rel_onehot[0, relation_idx] = 1.0
     return person_onehot, rel_onehot
