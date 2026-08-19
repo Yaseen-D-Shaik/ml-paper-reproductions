@@ -9,9 +9,11 @@ Run it: `python train.py`
 
 ## Where to look
 
-- `TECHNIQUES.md` — **start here.** Design decisions, every technique
-  tried (with what worked, what didn't, and why), and the takeaways worth
-  carrying into future ML work.
+- `notebooks/reproduction.ipynb` — **start here for a narrative walkthrough**
+  with the key figures embedded.
+- `TECHNIQUES.md` — design decisions, every technique tried (with what
+  worked, what didn't, and why), and the takeaways worth carrying into
+  future ML work.
 - `FINDINGS.md` — the full chronological experiment log behind those
   decisions, including every dead end.
 - `train.py` — the finalized training loop and evaluation (SGD + Grokfast +
@@ -25,6 +27,6 @@ Run it: `python train.py`
 - `data/` — family tree triples
 - `model/` — network architecture
 - `train.py` — training loop and evaluation
-- `visualize.py` — Figure 4 reproduction (not yet built — planned once
-  optimization work is complete)
-- `notebooks/` — end-to-end notebook (not yet built)
+- `visualize.py` — Figure 4/5 reproduction: person-encoding and held-out
+  test-result plots, saved to `figures/`
+- `notebooks/` — end-to-end narrative notebook
