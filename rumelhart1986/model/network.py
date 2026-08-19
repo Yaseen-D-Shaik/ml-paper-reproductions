@@ -23,7 +23,7 @@ class TreeNet(nn.Module):
     def __init__(self, encoding_nonlinearity="linear", w1_init_range=0.3,
                  encoding_dim=6, person_encoding_dim=None, relation_encoding_dim=None,
                  hidden_dim=6, hidden_nonlinearity="sigmoid", use_bilinear=False,
-                 init_scheme="uniform"):
+                 init_scheme="uniform", hidden_dim2=None):
         """
         encoding_nonlinearity: "linear" or "sigmoid" — whether C1/C2 outputs
             pass through a sigmoid (paper's Eq. 1+2 applied uniformly to all
@@ -64,6 +64,12 @@ class TreeNet(nn.Module):
             signal variance comparable across layers of very different width
             — relevant here since person_dim/relation_dim/hidden_dim can now
             differ enormously, unlike the paper's uniform 6/6/6/24 shape).
+        hidden_dim2: if not None, insert a second hidden layer of this width
+            between the existing penultimate layer and the output (depth
+            instead of width — a genuinely different kind of capacity than
+            hidden_dim, which only ever tested making the single hidden
+            layer wider). None (default) reproduces the original single-
+            hidden-layer architecture exactly.
         """
         super().__init__()
         self.encoding_nonlinearity = encoding_nonlinearity
@@ -80,7 +86,8 @@ class TreeNet(nn.Module):
         self.b_c2 = nn.Parameter(torch.zeros(relation_dim))
 
         # Central and output layers (Figure 3)
-        self.w2 = nn.Parameter(torch.empty(hidden_dim, 24))     # penultimate -> output
+        # If hidden_dim2 is set, w2 reads from the second hidden layer instead.
+        self.w2 = nn.Parameter(torch.empty(hidden_dim2 if hidden_dim2 is not None else hidden_dim, 24))
         self.b_w1 = nn.Parameter(torch.zeros(hidden_dim))
         self.b_w2 = nn.Parameter(torch.zeros(24))
 
@@ -110,6 +117,18 @@ class TreeNet(nn.Module):
             init_(self.w1, w1_init_range)
             self.bilinear = None
 
+        self.hidden_dim2 = hidden_dim2
+        if hidden_dim2 is not None:
+            # Second hidden layer: hidden_dim -> hidden_dim2. Initialized
+            # last so configs with hidden_dim2=None (the default) keep the
+            # exact original RNG draw order and stay reproducible.
+            self.w1b = nn.Parameter(torch.empty(hidden_dim, hidden_dim2))
+            self.b_w1b = nn.Parameter(torch.zeros(hidden_dim2))
+            init_(self.w1b, w1_init_range)
+        else:
+            self.w1b = None
+            self.b_w1b = None
+
     def forward(self, person1, relationship):
         """
         person1:      (1, 24) one-hot tensor
@@ -134,6 +153,11 @@ class TreeNet(nn.Module):
 
         # Central -> penultimate -> output (Eq. 1, 2)
         hidden = torch.tanh(pre_hidden) if self.hidden_nonlinearity == "tanh" else torch.sigmoid(pre_hidden)
+
+        if self.hidden_dim2 is not None:
+            pre_hidden2 = hidden @ self.w1b + self.b_w1b               # (1, hidden_dim2)
+            hidden = torch.tanh(pre_hidden2) if self.hidden_nonlinearity == "tanh" else torch.sigmoid(pre_hidden2)
+
         output = torch.sigmoid(hidden @ self.w2 + self.b_w2)          # (1, 24)
 
         return output
@@ -145,7 +169,10 @@ class TreeNet(nn.Module):
     def output_params(self):
         """Parameters that receive weight decay (Eq. 9 + paper decay rule)."""
         central_to_hidden = self.bilinear if self.use_bilinear else self.w1
-        return [central_to_hidden, self.w2, self.b_w1, self.b_w2]
+        params = [central_to_hidden, self.w2, self.b_w1, self.b_w2]
+        if self.hidden_dim2 is not None:
+            params += [self.w1b, self.b_w1b]
+        return params
 
 
 def encode(person_idx, relation_idx, n_people=24, n_relations=12):
