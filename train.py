@@ -1,9 +1,5 @@
-"""Final training script for the Rumelhart et al. (1986) family-tree
-reproduction: SGD + Grokfast + delayed weight decay, the recipe this
-project converged on after an extensive search. See TECHNIQUES.md for what
-each technique below does, why it's here, and what was tried and rejected.
-
-Run directly: `python train.py`
+"""Training loop for the family-tree reproduction: SGD + Grokfast + delayed
+weight decay. Run directly: `python train.py`
 """
 
 import random
@@ -17,28 +13,22 @@ SEED = 42
 N_SWEEPS = 35000
 LOG_EVERY = 5000
 
-# Paper's two-phase schedule (Fig. 4 caption): epsilon=0.005, alpha=0.5 for
-# sweeps 1-20, then epsilon=0.01, alpha=0.9 for the rest of training. Each
-# tuple is (last_sweep_of_phase, lr, momentum).
+# Paper's two-phase schedule (Fig. 4): epsilon=0.005, alpha=0.5 for sweeps
+# 1-20, then epsilon=0.01, alpha=0.9. Each tuple is (last_sweep, lr, momentum).
 LR_SCHEDULE = [(20, 0.005, 0.5), (float("inf"), 0.01, 0.9)]
 
-# Grokfast (Lee et al. 2024): amplifies the slow-varying (EMA) component of
-# each parameter's gradient before every optimizer step, active from sweep 1.
-# mu <- alpha*mu + (1-alpha)*g ;  g_hat <- g + lambda*mu
+# Grokfast (Lee et al. 2024): mu <- alpha*mu + (1-alpha)*g; g_hat <- g + lambda*mu
 GROKFAST_ALPHA = 0.98
 GROKFAST_LAMBDA = 2.0
 
-# Weight decay only engages once training has had room to fit (sweep
-# 16000), ramping in linearly over 1000 sweeps rather than switching on
-# abruptly, which was found to shock-collapse training.
+# Decay engages at sweep 16000, ramped over 1000 sweeps — an abrupt onset
+# shock-collapses training.
 DECAY_RATE = 0.9995
 DECAY_START_SWEEP = 16000
 DECAY_RAMP_SWEEPS = 1000
 
-# Two isomorphism-mirrored pairs — (English person, relation) and its
-# Italian counterpart — each a multi-answer key, so the network must recover
-# one of two valid targets it was never directly trained on. Verified real
-# against TRIPLES directly.
+# Two isomorphism-mirrored (English, Italian) pairs, each with two valid
+# answers — the network must recover one it was never directly trained on.
 TEST_TRIPLES = [
     (PEOPLE.index("Colin"),     RELATIONSHIPS.index("uncle"), PEOPLE.index("Arthur")),
     (PEOPLE.index("Alfonse"),   RELATIONSHIPS.index("uncle"), PEOPLE.index("Emilio")),
@@ -46,9 +36,7 @@ TEST_TRIPLES = [
     (PEOPLE.index("Sophia"),    RELATIONSHIPS.index("aunt"),  PEOPLE.index("Gina")),
 ]
 
-# A second, disjoint held-out set: also two isomorphism-mirrored pairs, but
-# each a genuinely single-answer fact (no ambiguity about "which" correct
-# answer). Held out from training the same way TEST_TRIPLES is.
+# A second held-out set, each a genuinely single-answer fact.
 VAL_TRIPLES = [
     (PEOPLE.index("Arthur"),  RELATIONSHIPS.index("nephew"), PEOPLE.index("Colin")),
     (PEOPLE.index("Emilio"),  RELATIONSHIPS.index("nephew"), PEOPLE.index("Alfonse")),
@@ -60,11 +48,7 @@ HELD_OUT = set(TEST_TRIPLES) | set(VAL_TRIPLES)
 
 
 def build_dataset():
-    """One multihot training example per (person1, relation) key in TRIPLES,
-    with every TEST_TRIPLES/VAL_TRIPLES fact removed — matching Fig. 3's
-    description of Colin's two aunts as one presentation with two correct
-    answers, a query keeps whichever of its correct answers aren't held out
-    (e.g. Colin's aunt keeps Jennifer; only Margaret is held out)."""
+    """One multihot example per (person1, relation) key, minus held-out facts."""
     examples = []
     for (p1_str, rel_str), p2_list in TRIPLES.items():
         p1_idx, rel_idx = PEOPLE.index(p1_str), RELATIONSHIPS.index(rel_str)
@@ -76,9 +60,8 @@ def build_dataset():
 
 
 def compute_loss(output, target):
-    """Squared error, masked per the paper's rule: "error was considered to
-    be zero if output units that should be on had activities above 0.8 and
-    output units that should be off had activities below 0.2." """
+    """Masked per the paper: error is zero once a unit that should be on is
+    above 0.8, or one that should be off is below 0.2."""
     error = output - target
     mask = ~((target == 1.0) & (output > 0.8)) & ~((target == 0.0) & (output < 0.2))
     return 0.5 * torch.sum((error * mask.detach()) ** 2)
@@ -98,9 +81,7 @@ def decay_rate_for_sweep(sweep):
 
 
 def evaluate(model, triples, label="", verbose=True):
-    """Paper-literal scoring: a query counts as correct only if every one of
-    its target units activates above 0.8. Also reports mean activation split
-    between target and non-target output units."""
+    """Paper's literal threshold: correct only if every target unit is above 0.8."""
     model.eval()
     target_acts, nontarget_acts, results = [], [], []
     with torch.no_grad():
@@ -134,13 +115,8 @@ def evaluate(model, triples, label="", verbose=True):
 
 
 def evaluate_argmax(model, triples, label="", verbose=True):
-    """Ranking-based scoring: a query counts as correct if the model's
-    single highest-activation output unit is ANY of that query's true
-    correct answers (not just the one specific fact we held out) — the
-    metric other reproductions of this paper report against, and consistent
-    with the paper's own multi-answer framing (Colin's two aunts, Fig. 4).
-    See TECHNIQUES.md for why this and the 0.8/0.2 threshold above can
-    disagree on the same query."""
+    """Ranking-based: correct if the model's top-activation unit is any of
+    the query's true valid answers, not just the one specific fact held out."""
     model.eval()
     correct = 0
     with torch.no_grad():
@@ -219,7 +195,7 @@ def train():
     evaluate(model, train_examples, label="TRAINING SET")
     evaluate(model, TEST_TRIPLES, label="HELD-OUT TEST TRIPLES")
     evaluate(model, VAL_TRIPLES, label="HELD-OUT VAL TRIPLES")
-    print("\nArgmax-in-valid-set scoring (see TECHNIQUES.md):")
+    print("\nArgmax-in-valid-set scoring:")
     evaluate_argmax(model, TEST_TRIPLES, label="TEST_TRIPLES")
     evaluate_argmax(model, VAL_TRIPLES, label="VAL_TRIPLES")
 

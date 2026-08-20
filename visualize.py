@@ -1,12 +1,11 @@
-"""Figure 4/5 reproduction: visualizes what the trained network actually
-learned. See TECHNIQUES.md sections 4.1 and 4.15 for what these two plots
-show and why they matter.
+"""Figure 4/5 reproduction: visualizes what the trained network learned.
 
 Run directly: `python visualize.py` (trains a fresh model, ~5-6 minutes,
-then writes figures/person_encoding.png and figures/test_results.png).
+then writes the three figures/*.png files below).
 """
 
 import os
+import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import torch
 
@@ -16,9 +15,6 @@ from model.network import encode
 
 FIGURES_DIR = os.path.join(os.path.dirname(__file__), "figures")
 
-# The paper's own labels for each person — not learned, just the family
-# tree structure (see data/family_tree.py's comments) — used to color and
-# annotate the plot below.
 GENERATION = {
     "Christopher": 1, "Penelope": 1, "Andrew": 1, "Christine": 1,
     "Roberto": 1, "Maria": 1, "Pierro": 1, "Francesca": 1,
@@ -32,10 +28,8 @@ NATIONALITY = {name: ("English" if name in ENGLISH else "Italian") for name in P
 
 
 def plot_person_encoding(model, out_path):
-    """Figure 5 analog. PERSON_DIM=1 here (not the paper's 6), so instead of
-    a multi-row Hinton diagram this is a single labeled value per person —
-    still enough to show the same story: the network organizes people by
-    generation and nationality without ever being told either."""
+    """Figure 5 analog: person-encoding value per person, colored by
+    nationality and generation — neither given to the network directly."""
     values = []
     for name in PEOPLE:
         p_onehot, _ = encode(PEOPLE.index(name), 0)
@@ -73,9 +67,8 @@ def plot_person_encoding(model, out_path):
 
 
 def plot_test_results(model, out_path):
-    """Visualizes the argmax-in-valid-set finding (TECHNIQUES.md 4.15): for
-    each held-out test query, the model's top-3 output activations, showing
-    that both real answers rank above every wrong candidate."""
+    """Top-3 output activations per held-out query — both real answers rank
+    above every wrong candidate."""
     fig, axes = plt.subplots(1, len(train.TEST_TRIPLES), figsize=(14, 4), sharey=True)
     for ax, (p1_idx, rel_idx, target_idx) in zip(axes, train.TEST_TRIPLES):
         valid = {PEOPLE.index(p2) for p2 in TRIPLES[(PEOPLE[p1_idx], RELATIONSHIPS[rel_idx])]}
@@ -108,16 +101,65 @@ def plot_test_results(model, out_path):
     plt.close(fig)
 
 
+def plot_activation_diagram(model, p1_name, rel_name, out_path):
+    """Figure 4 analog: activity levels across every layer for one query, as
+    a grid of squares sized by activation magnitude, bottom (input) to top
+    (output) — the paper's own style of showing what the network computed."""
+    p1_idx, rel_idx = PEOPLE.index(p1_name), RELATIONSHIPS.index(rel_name)
+    p1_onehot, r_onehot = encode(p1_idx, rel_idx)
+    with torch.no_grad():
+        p_repr = torch.sigmoid(p1_onehot @ model.c1 + model.b_c1)[0]
+        r_repr = torch.sigmoid(r_onehot @ model.c2 + model.b_c2)[0]
+        hidden = torch.sigmoid(torch.cat([p_repr, r_repr]).unsqueeze(0) @ model.w1 + model.b_w1)[0]
+        output = torch.sigmoid(hidden.unsqueeze(0) @ model.w2 + model.b_w2)[0]
+    valid = {PEOPLE.index(p2) for p2 in TRIPLES[(p1_name, rel_name)]}
+
+    rows = [
+        ("output (person2)", output.tolist(), {i: PEOPLE[i] for i in valid}, valid),
+        ("hidden", hidden.tolist(), None, None),
+        ("relation encoding (c2)", r_repr.tolist(), None, None),
+        ("person encoding (c1)", p_repr.tolist(), None, None),
+        ("relation (input)", r_onehot[0].tolist(), {rel_idx: rel_name}, None),
+        ("person1 (input)", p1_onehot[0].tolist(), {p1_idx: p1_name}, None),
+    ]
+
+    spacing, square_max = 0.45, 0.4
+    fig, ax = plt.subplots(figsize=(12, 8))
+    for row_i, (label, values, annotate, green_idxs) in enumerate(rows):
+        n = len(values)
+        width = n * spacing
+        for i, v in enumerate(values):
+            x = -width / 2 + (i + 0.5) * spacing
+            side = square_max * (v ** 0.5)
+            color = "#55A868" if green_idxs and i in green_idxs else "#4C72B0"
+            ax.add_patch(patches.Rectangle((x - side / 2, row_i - side / 2), side, side,
+                                            facecolor=color, edgecolor="none"))
+            if annotate and i in annotate:
+                ax.text(x, row_i - 0.55, annotate[i], ha="center", va="top", fontsize=8, rotation=30)
+        ax.text(-width / 2 - 0.3, row_i, label, ha="right", va="center", fontsize=9)
+
+    ax.set_xlim(-13, 13)
+    ax.set_ylim(-1.3, len(rows) - 0.3)
+    ax.axis("off")
+    ax.set_title(f"Activity levels for ({p1_name}, {rel_name}) — square area = activation\n"
+                 f"green output squares are the query's real correct answers", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
 def main():
     os.makedirs(FIGURES_DIR, exist_ok=True)
     model = train.train()
 
     person_path = os.path.join(FIGURES_DIR, "person_encoding.png")
     test_path = os.path.join(FIGURES_DIR, "test_results.png")
+    activation_path = os.path.join(FIGURES_DIR, "activation_diagram.png")
     plot_person_encoding(model, person_path)
     plot_test_results(model, test_path)
-    print(f"\nSaved {person_path}")
-    print(f"Saved {test_path}")
+    plot_activation_diagram(model, "Colin", "uncle", activation_path)
+    for path in (person_path, test_path, activation_path):
+        print(f"Saved {path}")
 
 
 if __name__ == "__main__":
