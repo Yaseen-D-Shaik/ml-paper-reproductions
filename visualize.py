@@ -123,26 +123,38 @@ def plot_activation_diagram(model, p1_name, rel_name, out_path):
         ("person1 (input)", p1_onehot[0].tolist(), {p1_idx: p1_name}, None),
     ]
 
-    spacing, square_max = 0.45, 0.4
-    fig, ax = plt.subplots(figsize=(12, 8))
+    spacing, cell = 0.55, 0.46
+    fig, ax = plt.subplots(figsize=(13, 9))
     for row_i, (label, values, annotate, green_idxs) in enumerate(rows):
         n = len(values)
         width = n * spacing
+        ax.axhspan(row_i - 0.5, row_i + 0.5, color="#F5F5F5" if row_i % 2 else "white", zorder=0)
         for i, v in enumerate(values):
             x = -width / 2 + (i + 0.5) * spacing
-            side = square_max * (v ** 0.5)
-            color = "#55A868" if green_idxs and i in green_idxs else "#4C72B0"
-            ax.add_patch(patches.Rectangle((x - side / 2, row_i - side / 2), side, side,
-                                            facecolor=color, edgecolor="none"))
+            is_answer = bool(green_idxs and i in green_idxs)
+            # Outline box: every unit's fixed-size cell, so "small value" and
+            # "no unit here" look different even when the fill is tiny.
+            ax.add_patch(patches.Rectangle((x - cell / 2, row_i - cell / 2), cell, cell,
+                                            facecolor="none",
+                                            edgecolor="#2E7D32" if is_answer else "#999999",
+                                            linewidth=1.3 if is_answer else 0.7, zorder=1))
+            side = cell * (v ** 0.5)
+            if side > 0.02:
+                color = "#55A868" if is_answer else "#4C72B0"
+                ax.add_patch(patches.Rectangle((x - side / 2, row_i - side / 2), side, side,
+                                                facecolor=color, edgecolor="black",
+                                                linewidth=0.5, zorder=2))
             if annotate and i in annotate:
-                ax.text(x, row_i - 0.55, annotate[i], ha="center", va="top", fontsize=8, rotation=30)
-        ax.text(-width / 2 - 0.3, row_i, label, ha="right", va="center", fontsize=9)
+                ax.text(x, row_i - cell / 2 - 0.1, annotate[i], ha="right", va="top",
+                         fontsize=8, rotation=40, rotation_mode="anchor")
+        ax.text(-width / 2 - 0.35, row_i, label, ha="right", va="center", fontsize=9.5)
 
     ax.set_xlim(-13, 13)
-    ax.set_ylim(-1.3, len(rows) - 0.3)
+    ax.set_ylim(-1.5, len(rows) - 0.5)
     ax.axis("off")
-    ax.set_title(f"Activity levels for ({p1_name}, {rel_name}) — square area = activation\n"
-                 f"green output squares are the query's real correct answers", fontsize=11)
+    ax.set_title(f"Activity levels for ({p1_name}, {rel_name})\n"
+                 f"square area = activation · outlined cell = one unit · green = the query's real correct answers",
+                 fontsize=11)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
