@@ -13,11 +13,31 @@ otherwise identical — and taught a small network to answer questions like
 generation, or a nationality was. It had to invent all of that for itself,
 just to answer the questions correctly. And it did.
 
-This is that experiment, rebuilt from scratch in PyTorch and pushed further
-than the original paper attempted. Below is the story of what it took to
-get there, what the network actually figured out, and a discovery about
-*how you grade a reproduction* that turned out to matter more than any
-single hyperparameter.
+This is that experiment, rebuilt from scratch in PyTorch.
+
+## What I set out to do
+
+The easy version of this project would have been: implement Figure 3,
+train it, confirm the network generalizes a bit, done. I wanted something
+harder to hide behind. Two rules, set before writing any code:
+
+- **Work from the paper's own description, not from someone else's
+  implementation.** Every design choice that deviates from the literal
+  text had to be *earned* — found by running the literal version, watching
+  it fail, and understanding why, not copied from a GitHub repo because it
+  happened to work there.
+- **Never hand the network an answer it's supposed to discover.** It would
+  have been trivial, for instance, to explicitly encode "siblings share
+  the same aunts and uncles" into the architecture — the held-out test
+  questions practically beg for it. I didn't. If the network was going to
+  know that, it had to learn it from the same 100-odd facts everything
+  else learned from.
+
+And once I found that two other public attempts to reproduce this exact
+paper existed, the goal sharpened further: not just "does this work," but
+**does it work better than the reproductions already out there** —
+against whatever benchmark they'd actually established, not an idealized
+number nobody had ever hit.
 
 ## The task
 
@@ -29,11 +49,47 @@ Four of those facts are deliberately hidden from it during training. A
 network that just memorized the training set has no chance on those four —
 it has to have actually inferred how the families are built.
 
+## Three points where this almost didn't work
+
+**The paper's own recipe doesn't converge.** The first real version of
+this project followed the paper as literally as I could manage — its
+architecture, its learning rate schedule, its weight decay. It didn't
+work. Not "worked poorly" — the held-out questions never moved off chance
+level, at any point in training. That was the first sign this wasn't
+going to be a straightforward implementation exercise: something the
+paper takes for granted either wasn't fully specified, or wasn't as
+simple to reproduce as thirty-odd years of citations made it sound.
+Figuring out *which* assumptions were load-bearing meant testing them one
+at a time rather than trusting any of them by default.
+
+**Every fix that seemed obvious made it worse.** The natural instinct when
+a network underperforms is to give it more room — a wider layer, another
+layer, a richer way of combining inputs. I tried all of that, separately,
+across nine different changes. Every single one raised training accuracy
+and lowered test performance. Not once did more capacity help. That
+result took longer to trust than to obtain — it's counterintuitive enough
+that the first few times, I assumed I'd made a mistake and re-ran the
+experiment. It hadn't. Eventually the pattern was consistent enough that
+"give it more room" stopped being the reflex, and I started asking what
+was actually constraining it instead.
+
+**The fix wasn't a bigger model — it was a different theory of training.**
+What broke the deadlock wasn't a hyperparameter, it was reading about
+*grokking*: the finding that small, structured tasks can make a network
+memorize almost immediately and then sit there, apparently stuck, until —
+often a very long time later — weight decay tips it over into actually
+generalizing, all at once. That reframed the whole problem. The training
+recipe that finally worked layers two techniques on top of plain gradient
+descent: weight decay engaged late and ramped in gradually (introducing it
+early or abruptly collapses training outright), and **Grokfast** (Lee et
+al., 2024), which amplifies the slow-moving part of the gradient to
+shorten how long that wait takes.
+
 ## What the network figured out on its own
 
 Nobody ever told the network which people are English and which are
-Italian, or which generation anyone belongs to. And yet, watch what happens
-to the single number the network learns to represent each person:
+Italian, or which generation anyone belongs to. And yet, watch what
+happens to the single number the network learns to represent each person:
 
 ![Person encoding](figures/person_encoding.png)
 
@@ -49,34 +105,6 @@ drawn in the same style Hinton used in his original paper, where the size
 of each square shows how strongly that unit fired:
 
 ![Activation diagram](figures/activation_diagram.png)
-
-## Getting there wasn't straightforward
-
-Training this network well took two techniques stacked on top of plain
-gradient descent:
-
-**Weight decay, used as a mechanism for generalization, not just as a
-safety net against overfitting.** This turns out to be a textbook case of
-*grokking* (Power et al., 2022): the network memorizes the training set
-almost immediately, then sits there for thousands of steps looking like
-it's learned nothing new — until decay quietly erodes the high-magnitude
-"memorizing" solution in favor of a smaller, structurally cleaner one that
-fits the same data. Generalization doesn't arrive gradually here. It
-arrives all at once, late, after the network looks finished. Turning decay
-on too early or too abruptly collapses training outright, so it only
-switches on at sweep 16,000, and even then it's ramped in gradually rather
-than flipped like a switch.
-
-**Grokfast** (Lee et al., 2024), which amplifies the slow-moving part of
-the gradient before every update, shortens how long that wait actually is.
-
-And one finding kept repeating no matter what else changed: **giving the
-network more room to work with only ever made it worse.** A wider hidden
-layer, a second hidden layer, a richer way of combining person and relation
-signals, a different weight initialization, a different activation function
-— nine separate attempts, and every single one traded away test
-performance for a higher training score. This network was never
-capacity-starved. Whatever it was missing, more room was never the answer.
 
 ## The twist: how you grade this changes everything
 
@@ -108,10 +136,35 @@ just match them — it answers all four questions correctly, including on a
 second, entirely unambiguous set of held-out questions built specifically
 to rule out this being a lucky quirk of the multi-answer setup.
 
-The lesson underneath all of this: before deciding a model has failed,
-it's worth asking exactly what "success" was defined to mean — because two
+## What this taught me
+
+The biggest lesson of this project isn't a technique — it's that I almost
+graded a working model as a failure. Before concluding a model has failed,
+it's worth asking exactly what "success" was defined to mean, because two
 completely reasonable definitions can look at the identical model and
-disagree completely.
+disagree completely. I'd internalized the paper's 80%-confidence rule as
+*the* definition without questioning it, and it took actually reading how
+other people graded their own reproductions to notice I'd been holding
+this one to a stricter bar than anyone else was using.
+
+The second lesson was about trusting my own results. One fix I tried —
+compensating for a handful of output units that were getting less training
+signal than the others — looked genuinely excellent on the first seed I
+tested: a clear improvement over everything before it. Checked against
+three more seeds, the average came out *worse* than doing nothing at all.
+That fix is still in this project's history, not because it worked, but
+because it's the reason every result that mattered after that point got
+checked across multiple seeds before I believed it.
+
+And the third: understanding exactly *why* something isn't working is
+real progress, even when it doesn't hand you the fix. I eventually traced
+the network's remaining underconfidence to four specific output units that
+were structurally getting less training signal than every other unit in
+the network — and confirmed it three separate, independent ways. Two
+different attempts to correct it both failed. The mechanism was still
+worth knowing. Diagnosis and repair turned out to be two different skills,
+and I didn't have to succeed at the second one to have learned something
+real from the first.
 
 ## Try it yourself
 
