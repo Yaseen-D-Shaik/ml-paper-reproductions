@@ -25,7 +25,7 @@ This repo is the record of building that kind of understanding.
 
 | Paper | Year | Key Concept | Status | Notes |
 |-------|------|-------------|--------|-------|
-| Coming soon | — | — | — | — |
+| Rumelhart et al. (1986) | 1986 | backpropagation | Completed | — |
 
 ---
 
@@ -49,7 +49,7 @@ Every completed reproduction contains:
 
 Papers I'm planning to reproduce, roughly in order:
 
-- [ ] Rumelhart et al. (1986)
+- [x] Rumelhart et al. (1986)
 - [ ] Srivastava et al. (2014)
 - [ ] Ioffe & Szegedy (2015)
 - [ ] Krizhevsky et al. (2012)
