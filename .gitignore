@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 FINDINGS.md
 TECHNIQUES.md
+FILE_REFERENCE.md
